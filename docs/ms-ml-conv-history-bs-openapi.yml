@@ -96,8 +96,8 @@ definitions:
   handler.messageResponse:
     properties:
       _id:
-        description: 'ID is the message id and the paging cursor: the outbox id of
-          its event, as a string.'
+        description: 'ID is the message id and the paging cursor: the sequence of
+          its event in the conversation, as a string. It is unique within the conversation.'
         example: "1042"
         type: string
       authorId:

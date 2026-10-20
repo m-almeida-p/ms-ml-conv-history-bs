@@ -1,6 +1,6 @@
 # Design
 
-How the outbox events of the agent become a chat history. Scope: the P2P flow; the same
+How the events of the agent's `conversation_events` table become a chat history. Scope: the P2P flow; the same
 tables serve other flows.
 
 ## Data flow
@@ -12,12 +12,12 @@ sequenceDiagram
     participant K as Kafka
     participant C as Consumer
     participant P as Postgres (history)
-    Note over A,D: Save writes the event<br/>and its outbox row<br/>in one transaction
-    D->>K: flat outbox row, key {"id": N}
+    Note over A,D: Save writes the events<br/>in one transaction
+    D->>K: flat row, key {"conversation_id": "..."}
     K->>C: record
     Note over K,C: decode: skip the header,<br/>parse the JSON and the<br/>two JSON strings
     C->>P: BEGIN
-    C->>P: INSERT inbox ON CONFLICT (outbox_id) DO NOTHING
+    C->>P: INSERT inbox ON CONFLICT (conversation_id, sequence) DO NOTHING
     alt a new chat event
         C->>P: UPSERT conversation_messages
     end
@@ -30,19 +30,23 @@ inbox primary key and writes nothing.
 
 ## What Debezium publishes
 
-One connector, `conversation-outbox`, owned by the agent repo (`local/debezium/`). It captures
-`public.conversation_outbox` only, through its own publication and replication slot, and
-publishes the flat row (no `before`/`after` envelope) to `yape.public.conversation_outbox`.
+One connector, `conversation-events`, owned by the agent repo (`local/debezium/`). It captures
+`public.conversation_events` only, through its own publication and replication slot, and
+publishes the flat row (no `before`/`after` envelope) to `yape.public.conversation_events`. The table is
+append-only, keyed by `(conversation_id, sequence)` and never pruned, so a re-snapshot can always republish the
+whole history. Every column is published, so
+adding a column to the table adds a field to the record (the decoder ignores fields it does not know), and a
+column that must not leave the database is excluded in the connector.
 
 | Part | Format |
 |------|--------|
-| Key | 5-byte Schema Registry header + `{"id": <outbox id>}` |
-| Value | 5-byte header + the row as JSON: `id`, `conversation_id`, `sequence`, `event_name`, `event_version`, `payload`, `metadata`, `correlation_id`, `id_yape_account`, `actor`, `published`, `created_at` |
+| Key | 5-byte Schema Registry header + `{"conversation_id": "<id>"}` (`message.key.columns`), so a conversation stays on one partition, in order |
+| Value | 5-byte header + the row as JSON: `conversation_id`, `sequence`, `event_name`, `event_version`, `payload`, `metadata`, `correlation_id`, `id_yape_account`, `actor`, `occurred_at` |
 | `payload`, `metadata` | JSON **strings** (JSONB arrives as text) |
-| `created_at` | RFC 3339, microseconds, `Z` |
-| Delete in the outbox | a record with the key and a null value (tombstone) |
+| `occurred_at` | RFC 3339, microseconds, `Z` |
+| Delete in the event store | not published (the delete and its tombstone are dropped); the consumer still skips a tombstone if one arrives |
 
-`testdata/outbox-record.{key,value}.bin` is a real record. The decoder (`internal/infrastructure/kafka/decoder.go`)
+`testdata/events-record.{key,value}.bin` is a real record. The decoder (`internal/infrastructure/kafka/decoder.go`)
 skips the header when the first byte is `0`, accepts plain JSON, parses the two strings,
 ignores unknown fields, and returns `nil` for a tombstone. Anything else it cannot read is a
 `*DecodeError` with topic, partition, offset, reason and field name, never the content.
@@ -56,15 +60,24 @@ ignores unknown fields, and returns `nil` for a tombstone. Anything else it cann
 | Tombstone | offset committed |
 | Record that cannot be decoded | logged without content, counted, offset committed |
 | Event that should project but lacks its text | stored in the inbox without a message, counted as invalid; offset committed |
-| Value the columns cannot hold (id or sequence out of range, an id or name over 128 characters) | refused by the decoder like any malformed record: logged without content, counted, offset committed |
+| Value the columns cannot hold (sequence or version out of range, an id or name over 128 characters) | refused by the decoder like any malformed record: logged without content, counted, offset committed |
 | Store refuses for good: a constraint violation (SQLSTATE class 23) or data it cannot hold (class 22, such as a NUL character in the payload) | logged with the class, constraint and code only (Postgres puts the failing row in the error detail), counted as rejected, offset committed |
-| An outbox id that already belongs to another event (the agent's outbox was recreated and its ids restarted) | refused as rejected and logged at error level, so the event is not lost without a trace |
+| A different event at a stream position the inbox already holds (name, version, payload or metadata differ) | refused as rejected and logged at error level, so the event is not lost without a trace |
 | Store error that a retry can fix (database down) | retried in place, wait 1 s doubling to 30 s; the offset does not move until it works or the process stops |
-| Offset commit fails | warned; a later commit covers it; if none comes the broker redelivers and the inbox ignores it |
+| Offset commit fails | the error is returned to the Kafka library, which logs it; a later commit covers it; if none comes the broker redelivers and the inbox ignores it |
 
 A record that can never be stored never blocks a partition: retrying it would not help, so it is skipped and counted. A database outage blocks it on purpose, and nothing is
-lost. The library's loop stops on SIGINT and SIGTERM (it listens for them itself) or on a fatal
-broker error; the binary then logs its totals and exits 0.
+lost.
+
+The retry loop does not poll, so an outage longer than `max.poll.interval.ms` (`KAFKA_MAX_POLL_INTERVAL_MS`, 5 minutes) makes the broker drop the member from the group. After the
+database returns, the event in hand is stored, its offset commit fails, the broker hands the record out again and the inbox counts it as a duplicate. The outage test shows this with a 10 second
+poll interval: ten events stored, one duplicate, every offset committed. `KAFKA_SESSION_TIMEOUT_MS` (45 seconds) must not exceed the poll interval. The library's loop stops on SIGINT and SIGTERM (it listens for them itself) or on a fatal
+broker error, and returns no error in either case. The process's own signal context tells them
+apart: when the loop ends after the signal, the binary logs its totals and exits 0; when it ends
+with no signal (a fatal broker error), it waits one second for the signal to arrive, then logs its
+totals and exits 1, so a supervisor restarts it. After the signal, no further record is handled or
+committed, which keeps a record that never reaches the store from covering the offset of an event
+left unstored.
 
 The Kafka client is Yape's `lib-go-kafkalizer`. Auto commit is off and its automatic error
 handling is off, because that path publishes to a dead-letter engine this service does not have.
@@ -76,9 +89,8 @@ The SQL lives in `ml-genai-agents-bs-testing/migrations/history/p2p/` and commen
 ```mermaid
 erDiagram
     conversation_inbox {
-        bigint outbox_id PK "id of the agent outbox row"
-        varchar conversation_id "UNIQUE with sequence"
-        int sequence "stream position"
+        varchar conversation_id PK "with sequence"
+        int sequence PK "stream position"
         varchar event_name
         int event_version
         jsonb payload
@@ -86,7 +98,7 @@ erDiagram
         text correlation_id
         text id_yape_account
         text actor "user, agent or system"
-        timestamptz occurred_at "outbox created_at"
+        timestamptz occurred_at "conversation_events occurred_at"
         text kafka_topic
         int kafka_partition
         bigint kafka_offset
@@ -96,7 +108,6 @@ erDiagram
     conversation_messages {
         varchar conversation_id PK
         int sequence PK
-        bigint outbox_id "UNIQUE, the message _id"
         text role "appUser or appMaker"
         text author_id
         text type "text"
@@ -111,7 +122,14 @@ erDiagram
 
 The inbox keeps every event that arrives, chat or not, with the Kafka coordinates it came from.
 It is the source a rebuild replays. `projected_at` is set in the same transaction as the
-projection, so a stamped row is a processed row.
+projection, so a stamped row is a processed row. An event that should have projected but lacks its
+text is stamped too (it is stored without a message and counted as invalid), so `projected_at` does not
+find those; the `invalid` counter and the log do.
+
+**Conversation ids are never reused.** The inbox key is `(conversation_id, sequence)`. If a deleted
+conversation's id were used again, its new events would meet the inbox's copies: different content is
+rejected and identical content is ignored. The BFF issues a new id per conversation, and the event
+store is cleaned of whole, closed conversations only.
 
 ## Projection
 
@@ -139,18 +157,18 @@ Shaped after the Smooch (Sunshine Conversations) v2 list-messages call.
 {
   "conversation": { "_id": "conv_v1_8ab59029-bc3c-4e77-b49f-9fb053d90c52" },
   "messages": [
-    { "_id": "1042", "type": "text", "role": "appUser", "authorId": "<idYapeAccount>", "text": "quiero yapear",
+    { "_id": "2", "type": "text", "role": "appUser", "authorId": "<idYapeAccount>", "text": "quiero yapear",
       "received": 1792505243.792, "source": { "type": "api" },
       "metadata": { "sequence": 2, "sourceEvent": "UserMessageSent", "truncated": false } }
   ],
-  "meta": { "hasMore": true, "beforeCursor": "1042", "afterCursor": "1051" },
-  "links": { "prev": "/v1/conversations/conv_v1_.../messages?page[before]=1042" }
+  "meta": { "hasMore": true, "beforeCursor": "2", "afterCursor": "11" },
+  "links": { "prev": "/v1/conversations/conv_v1_.../messages?page[before]=2" }
 }
 ```
 
 | Smooch field | Source |
 |--------------|--------|
-| `_id` | the outbox id, as a string |
+| `_id` | the event's `sequence`, as a string; unique within the conversation |
 | `role`, `authorId` | the projection table above |
 | `received` | the event time, Unix seconds with milliseconds |
 | `metadata` | `sequence`, `sourceEvent`, `truncated` |
@@ -161,7 +179,7 @@ Left out: `name`, `avatarUrl`, `actions`, `items`, `mediaUrl`, `quotedMessage`, 
 ### Paging
 
 The cursor is a message `_id`, as in Smooch. The server finds it with
-`WHERE conversation_id = $1 AND outbox_id = $2`, then compares `sequence`. A page is 100 messages.
+`WHERE conversation_id = $1 AND sequence = $2`, which proves the cursor is a message of the conversation. The sequence is the cursor, and `sequence < $2` or `> $2` picks the page. A page is 100 messages.
 
 ```mermaid
 flowchart TD
@@ -189,7 +207,13 @@ is `messages: []` with no cursors. `beforeCursor` is the first message of the pa
 last. The store reads 101 rows and trims one, so `hasMore` costs no second query.
 
 A conversation is known when it has chat messages; a conversation of tool events alone answers `404`.
-The conversation list returns the latest 100 with `meta.hasMore` and has no paging.
+The conversation list returns the latest 100 with `meta.hasMore` and has no paging. It reads the
+account's messages through `conversation_messages_account_idx (id_yape_account, received_at DESC)`, so its
+cost grows with the account's history: an account with 80 messages touches 13 buffers and one with 20,000
+messages in 500 conversations touches 131 and answers in under 4 ms (measured on 400,000 messages). A
+covering index `(id_yape_account, conversation_id, received_at DESC)` gave an index-only scan, but not
+fewer buffers on the heavy account, so the index stays as it is. The step after that, when a single
+account reaches millions of messages, is a conversations table.
 
 | Status | Code | When |
 |--------|------|------|
@@ -226,11 +250,10 @@ sequence)`, upserts by position), and tests keep them correct as the code change
 Each runs a scenario with every executor of `internal/testsupport/concurrent` (one task at a time, then all
 at once) and compares the outcomes. They fail under `-race` when shared state is introduced.
 
-**Two writers storing the same event.** Postgres can report a violation of the stream key,
-`(conversation_id, sequence)`, before `ON CONFLICT (outbox_id)` settles the race. The other writer's row is
-committed when the error comes back, so `Apply` looks again from outside the aborted transaction: if the row
-holding that outbox id is this very event, it is a repeat and writes nothing. If another event holds the id,
-or no row does, the violation is reported as it is.
+**Two writers storing the same event.** The stream key, `(conversation_id, sequence)`, is the primary key and
+the `ON CONFLICT` target, so Postgres settles the race without an error: one writer inserts, the other sees
+`RowsAffected = 0`. `Apply` then compares the stored event with its own (name, version, payload and metadata,
+the JSON by value). Equal is a repeat and writes nothing; different is `ErrRejected`.
 
 Production code starts no goroutine outside `internal/core/async`, whose executor a test can swap, and a
 test does not wait with `time.Sleep`; `scripts/check-conventions.sh` enforces both. Nothing in the service
@@ -264,9 +287,17 @@ number that does not parse (`SERVER_PORT=abc`) fails the load with the field typ
 
 ## Privacy
 
-No message text, cursor, conversation id or account id reaches a log: the consumer logs ids,
-coordinates and counts, the API logs the route pattern and not the URL. Decode and store errors are
-built without content. The API has no authentication, so it must not be deployed.
+No message text, cursor, conversation id or account id reaches a log. The consumer names an event
+by its Kafka coordinates (`topic/partition/offset`) and logs counts; the API logs the route pattern
+and not the URL. Decode errors carry the coordinates, a reason and a field name. Database errors are
+printed from their SQLSTATE, and from the server's message only for classes that cannot quote a value
+(connection, serialization, resources, operator shutdown); the detail, hint and context never are. A
+test with a secret in every part of the error pins this. The API has no authentication, so it must not
+be deployed.
+
+Only ids the API can serve are stored: `conversation_id` and `id_yape_account` must match
+`^[A-Za-z0-9._:-]{1,128}$`, the same rule the API applies to its parameters. A record outside it is
+skipped and counted as malformed, with the field name in the log.
 
 ## Operations
 
@@ -274,6 +305,7 @@ built without content. The API has no authentication, so it must not be deployed
 |------|-----|
 | Recreate the messages | `go run ./cmd/consumer rebuild` |
 | Check the history against the event store | `local/scripts/verify.sh` |
-| The agent's outbox was dropped and created again | its ids restart at 1 and the inbox refuses each new event that reuses an old id (rejected, logged at error level): drop the history tables (`make migrations/down CONFIRM=yes`, then `up`) and reset the consumer group offsets (`local/README.md`) |
+| Events deleted from the tail of a live conversation and written again | the new events reuse old positions and the inbox refuses them (rejected, logged at error level). Delete whole, closed conversations only. To start over, drop the history tables (`make migrations/down CONFIRM=yes`, then `up`) and reset the consumer group offsets (`local/README.md`) |
+| Events deleted from the event store | not published; the history keeps its copy of the conversation. Clear it from the history too if the deletion is for erasure |
 | Replication slot lag | a stopped connector with a live slot makes Postgres keep WAL; drop the slot when the connector is retired for good (`ms-ml-genai-agents-bs/local/debezium/README.md`) |
 | Test records on the shared topic | the Debezium pipeline test leaves rows with `conversation_id` starting `pipeline-dbz-` and account `acc-pipeline` |

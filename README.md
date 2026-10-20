@@ -1,6 +1,6 @@
 # ms-ml-conv-history-bs
 
-Conversation history for the Yape assistant. It receives the agent's outbox events from
+Conversation history for the Yape assistant. It receives the agent's conversation events from
 Kafka (published by Debezium), keeps every one in an inbox, projects the chat between the
 user and the assistant into a history table, and serves that history over a small HTTP API
 shaped after the Smooch message.
@@ -9,8 +9,8 @@ PoC for AIP-472. The API has no authentication, so this service must not be depl
 
 ```mermaid
 flowchart LR
-    A["Agent<br/>conversation_events + conversation_outbox<br/>one transaction"] -->|"WAL"| D["Kafka Connect + Debezium<br/>only public.conversation_outbox"]
-    D --> K[("Topic<br/>yape.public.conversation_outbox<br/>3 partitions")]
+    A["Agent<br/>conversation_events<br/>one transaction"] -->|"WAL"| D["Kafka Connect + Debezium<br/>only public.conversation_events"]
+    D --> K[("Topic<br/>yape.public.conversation_events<br/>3 partitions")]
     K --> C["cmd/consumer"]
     C -->|"one transaction"| I[("conversation_inbox")]
     C -->|"same transaction"| M[("conversation_messages")]
@@ -92,9 +92,10 @@ shape and the paging rule.
 | `POSTGRES_CONN_MAX_LIFETIME`, `POSTGRES_CONN_MAX_IDLE_TIME`, `POSTGRES_CONNECT_TIMEOUT` | `3600`, `300`, `10` (seconds) |
 | `KAFKA_CLIENT_BROKERS` | `localhost:9092` |
 | `KAFKA_CLIENT_SASL_KEY`, `KAFKA_CLIENT_SASL_SECRET` | empty; both set turn on SASL over TLS |
-| `KAFKA_TOPIC_OUTBOX` | `yape.public.conversation_outbox` |
+| `KAFKA_TOPIC_EVENTS` | `yape.public.conversation_events` |
 | `KAFKA_GROUP_ID` | `ms-ml-conv-history-bs` |
-| `KAFKA_AUTO_OFFSET_RESET` | `earliest` |
+| `KAFKA_AUTO_OFFSET_RESET` | `earliest`; `latest` starts a group with no committed offset at the end of the topic and skips the history before it, so the consumer logs a warning at startup |
+| `KAFKA_MAX_POLL_INTERVAL_MS`, `KAFKA_SESSION_TIMEOUT_MS` | `300000`, `45000` (the first must not be below the second) |
 | `LOG_LEVEL` | `info` |
 | `ENVIRONMENT` | `development`; `production` skips reading `.env` |
 
@@ -140,6 +141,14 @@ counters and config loading (no database), and for writers racing on a real Post
 races (a shared counter, a shared map) make them fail. `scripts/check-conventions.sh` keeps new ones out:
 production code starts no goroutine outside `internal/core/async`, and a test does not wait with
 `time.Sleep`.
+
+### Process-level tests
+
+`make it` and `make pipeline` also run the built consumer as a process: a database outage longer than
+`max.poll.interval.ms` (the test Postgres container is stopped and started again), SIGTERM while the
+consumer retries against a dead database, records of every shape the broker can carry (near 1 MB, each
+compression codec, another schema id, extra fields, no key) and a lost replication slot rehearsed with a
+second connector that has its own slot, publication and topic.
 
 Mocks come from `//go:generate mockery` directives next to each port; regenerate one with
 `go generate ./internal/core/port/service/<file>.go`.
