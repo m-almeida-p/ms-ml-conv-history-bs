@@ -1,0 +1,30 @@
+server:
+  port: ${SERVER_PORT:-3100}
+  environment: ${ENVIRONMENT:-development}
+
+# Same layout as ms-ml-genai-agents-bs, so a DSN or the discrete fields work alike.
+postgres:
+  # Full connection string. When set it wins over the discrete fields below.
+  dsn: ${POSTGRES_DSN:-}
+  host: ${POSTGRES_HOST:-localhost}
+  port: ${POSTGRES_PORT:-5432}
+  user: ${POSTGRES_USER:-postgres}
+  password: ${POSTGRES_PASSWORD:-}
+  database: ${POSTGRES_DB:-postgres}
+  ssl_mode: ${POSTGRES_SSL_MODE:-disable}
+  max_conns: ${POSTGRES_MAX_CONNS:-10}
+  min_conns: ${POSTGRES_MIN_CONNS:-2}
+  conn_max_lifetime_seconds: ${POSTGRES_CONN_MAX_LIFETIME:-3600}
+  conn_max_idle_time_seconds: ${POSTGRES_CONN_MAX_IDLE_TIME:-300}
+  connect_timeout_seconds: ${POSTGRES_CONNECT_TIMEOUT:-10}
+
+# The broker list uses the variable lib-go-kafkalizer reads itself. SASL
+# credentials stay in KAFKA_CLIENT_SASL_KEY and KAFKA_CLIENT_SASL_SECRET.
+kafka:
+  brokers: ${KAFKA_CLIENT_BROKERS:-localhost:9092}
+  topic: ${KAFKA_TOPIC_OUTBOX:-yape.public.conversation_outbox}
+  group_id: ${KAFKA_GROUP_ID:-ms-ml-conv-history-bs}
+  auto_offset_reset: ${KAFKA_AUTO_OFFSET_RESET:-earliest}
+
+logging:
+  level: ${LOG_LEVEL:-info}

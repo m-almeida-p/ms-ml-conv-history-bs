@@ -1,0 +1,16 @@
+# Binaries
+/api
+/consumer
+/bin/
+
+# Test and coverage output
+coverage.out
+coverage
+
+# Local settings: never commit
+.env
+.env.*
+!.env.example
+
+.idea/
+.DS_Store
