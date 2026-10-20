@@ -63,7 +63,7 @@ func TestServerAnswersTheSameWhenRequestsArriveAtOnce(t *testing.T) {
 	}
 	scenario := func(exec concurrent.Executor) []reply {
 		return concurrent.Collect(exec, 64, func(i int) reply {
-			rec := do(server, http.MethodGet, targets[i%len(targets)].path)
+			rec := get(server, targets[i%len(targets)].path)
 
 			return reply{rec.Code, rec.Body.String()}
 		})

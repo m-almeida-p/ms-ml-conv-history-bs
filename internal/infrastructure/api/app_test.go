@@ -33,9 +33,9 @@ func (l *recordingLog) Infof(msg string, v ...any)  { l.add("info", msg, v...) }
 func (l *recordingLog) Errorf(msg string, v ...any) { l.add("error", msg, v...) }
 func (l *recordingLog) text() string                { return strings.Join(l.lines, "\n") }
 
-func do(e *echo.Echo, method, target string) *httptest.ResponseRecorder {
+func get(e *echo.Echo, target string) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
-	e.ServeHTTP(rec, httptest.NewRequest(method, target, nil))
+	e.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
 
 	return rec
 }
@@ -56,7 +56,7 @@ func TestHealth(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			e := NewServer(mocks.NewHistory(t), &recordingLog{}, tt.ping)
 
-			rec := do(e, http.MethodGet, "/health")
+			rec := get(e, "/health")
 
 			assert.Equal(t, tt.wantStatus, rec.Code)
 			assert.JSONEq(t, tt.wantBody, rec.Body.String())
@@ -95,7 +95,7 @@ func TestServerRoutes(t *testing.T) {
 			history := mocks.NewHistory(t)
 			tt.expect(history)
 
-			rec := do(NewServer(history, &recordingLog{}, nil), http.MethodGet, tt.target)
+			rec := get(NewServer(history, &recordingLog{}, nil), tt.target)
 
 			assert.Equal(t, tt.wantStatus, rec.Code)
 		})
@@ -121,7 +121,7 @@ func TestRequestLogHasTheRouteNotTheValues(t *testing.T) {
 			history.On("Messages", mock.Anything, mock.Anything).Return(domain.MessagePage{}, nil).Maybe()
 			log := &recordingLog{}
 
-			rec := do(NewServer(history, log, nil), http.MethodGet, tt.target)
+			rec := get(NewServer(history, log, nil), tt.target)
 
 			assert.Equal(t, tt.wantStatus, rec.Code)
 			assert.Contains(t, log.text(), tt.wantLine)
@@ -137,7 +137,7 @@ func TestPanicIsAnsweredAndLogged(t *testing.T) {
 	e := NewServer(mocks.NewHistory(t), log, nil)
 	e.GET("/boom", func(echo.Context) error { panic("something broke") })
 
-	rec := do(e, http.MethodGet, "/boom")
+	rec := get(e, "/boom")
 
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 	assert.Contains(t, rec.Body.String(), `"code":"internal_error"`)

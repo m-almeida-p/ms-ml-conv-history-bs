@@ -247,7 +247,7 @@ func TestConsumerHandle(t *testing.T) {
 			ingest := mocks.NewProjection(t)
 			calls := 0
 			ingest.On("Handle", mock.Anything, mock.Anything).Return(
-				func(_ context.Context, e domain.InboxEvent) domain.ApplyResult {
+				func(context.Context, domain.InboxEvent) domain.ApplyResult {
 					r := tt.results[calls]
 					return r.result
 				},

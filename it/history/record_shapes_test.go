@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-	"time"
 
 	ckafka "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/stretchr/testify/assert"
@@ -15,14 +14,8 @@ import (
 // fields the case needs, so a record can differ from the usual one in ways the
 // connector or Schema Registry may change over time.
 func shapedValue(conversationID string, schemaID byte, text string, extra map[string]any) []byte {
-	payload, _ := json.Marshal(map[string]any{"text": text})
-	metadata, _ := json.Marshal(map[string]string{"actor": "user", "id_yape_account": "acc-shapes"})
-	row := map[string]any{
-		"conversation_id": conversationID, "sequence": 1, "event_name": "UserMessageSent", "event_version": 1,
-		"payload": string(payload), "metadata": string(metadata),
-		"correlation_id": "corr", "id_yape_account": "acc-shapes", "actor": "user",
-		"occurred_at": time.Date(2026, 10, 20, 15, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
-	}
+	row := eventRow(conversationID, 1, "UserMessageSent", map[string]any{"text": text})
+	row["id_yape_account"] = "acc-shapes"
 	for k, v := range extra {
 		row[k] = v
 	}

@@ -234,7 +234,7 @@ func TestApply(t *testing.T) {
 			change       func(e *domain.InboxEvent)
 			wantRejected bool
 		}{
-			{name: "theSameEvent", change: func(e *domain.InboxEvent) {}},
+			{name: "theSameEvent", change: func(*domain.InboxEvent) {}},
 			{name: "theSamePayloadWrittenWithOtherSpacing", change: func(e *domain.InboxEvent) { e.Payload = json.RawMessage(`{"text":"quiero yapear"}`) }},
 			{name: "anotherPayload", change: func(e *domain.InboxEvent) { e.Payload = json.RawMessage(`{"text": "otro"}`) }, wantRejected: true},
 			{name: "anotherEventName", change: func(e *domain.InboxEvent) { e.EventName = "AgentMessageSent" }, wantRejected: true},

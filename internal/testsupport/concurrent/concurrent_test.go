@@ -133,7 +133,7 @@ func TestOutcomes(t *testing.T) {
 func TestCountAndMap(t *testing.T) {
 	assert.Equal(t, 0, Count([]int(nil), func(int) bool { return true }))
 	assert.Equal(t, 2, Count([]int{1, 2, 3, 4}, func(n int) bool { return n%2 == 0 }))
-	assert.Equal(t, []string{}, Map([]int(nil), func(n int) string { return "x" }))
+	assert.Equal(t, []string{}, Map([]int(nil), func(int) string { return "x" }))
 	assert.Equal(t, []string{"1", "2"}, Map([]int{1, 2}, func(n int) string { return string(rune('0' + n)) }))
 }
 

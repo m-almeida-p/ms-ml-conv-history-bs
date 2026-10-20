@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -51,18 +52,12 @@ func loadSpec(t *testing.T) spec {
 }
 
 // documentedRoutes lists "METHOD /path" as the server writes it (:param, not {param}).
+var braces = regexp.MustCompile(`\{([^}]+)\}`)
+
 func documentedRoutes(s spec) []string {
 	var routes []string
 	for path, methods := range s.Paths {
-		echoPath := path
-		for {
-			open := strings.Index(echoPath, "{")
-			if open < 0 {
-				break
-			}
-			close := strings.Index(echoPath[open:], "}") + open
-			echoPath = echoPath[:open] + ":" + echoPath[open+1:close] + echoPath[close+1:]
-		}
+		echoPath := braces.ReplaceAllString(path, ":$1")
 		for method := range methods {
 			routes = append(routes, strings.ToUpper(method)+" "+echoPath)
 		}
@@ -271,7 +266,7 @@ func TestRepliesConformToTheOpenAPISpec(t *testing.T) {
 			history := mocks.NewHistory(t)
 			tt.expect(history)
 
-			rec := do(NewServer(history, &recordingLog{}, tt.ping), http.MethodGet, tt.target)
+			rec := get(NewServer(history, &recordingLog{}, tt.ping), tt.target)
 
 			require.Equal(t, tt.wantStatus, rec.Code)
 			var body any

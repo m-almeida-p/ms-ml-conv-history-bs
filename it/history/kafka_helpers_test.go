@@ -177,15 +177,21 @@ func eventKey(conversationID string) []byte {
 	return framed(3, key)
 }
 
-func eventValue(conversationID string, sequence int, eventName string, payload map[string]any) []byte {
+// eventRow is the flat row Debezium publishes for a conversation_events row.
+func eventRow(conversationID string, sequence int, eventName string, payload map[string]any) map[string]any {
 	payloadJSON, _ := json.Marshal(payload)
 	metadataJSON, _ := json.Marshal(map[string]string{"actor": "user", "id_yape_account": "acc-pipeline"})
-	body, _ := json.Marshal(map[string]any{
+
+	return map[string]any{
 		"conversation_id": conversationID, "sequence": sequence, "event_name": eventName, "event_version": 1,
 		"payload": string(payloadJSON), "metadata": string(metadataJSON),
 		"correlation_id": "corr-pipeline", "id_yape_account": "acc-pipeline", "actor": "user",
 		"occurred_at": time.Date(2026, 10, 20, 15, 0, sequence%60, 0, time.UTC).Format(time.RFC3339Nano),
-	})
+	}
+}
+
+func eventValue(conversationID string, sequence int, eventName string, payload map[string]any) []byte {
+	body, _ := json.Marshal(eventRow(conversationID, sequence, eventName, payload))
 
 	return framed(4, body)
 }
