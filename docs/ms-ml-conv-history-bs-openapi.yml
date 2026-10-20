@@ -1,0 +1,286 @@
+basePath: /
+definitions:
+  api.healthResponse:
+    properties:
+      status:
+        enum:
+        - ok
+        - unavailable
+        example: ok
+        type: string
+    type: object
+  handler.conversationRef:
+    properties:
+      _id:
+        description: ID is the conversation id (the A2A contextId).
+        example: conv_v1_8ab59029-bc3c-4e77-b49f-9fb053d90c52
+        type: string
+    type: object
+  handler.conversationResponse:
+    properties:
+      _id:
+        example: conv_v1_8ab59029-bc3c-4e77-b49f-9fb053d90c52
+        type: string
+      firstReceived:
+        description: FirstReceived and LastReceived are the times of the first and
+          last message, in Unix seconds with milliseconds.
+        example: 1.7925052435e+09
+        type: number
+      lastReceived:
+        example: 1.7925055435e+09
+        type: number
+      messageCount:
+        example: 5
+        type: integer
+    type: object
+  handler.conversationsMeta:
+    properties:
+      hasMore:
+        description: HasMore is true when the account has more conversations than
+          the 100 listed.
+        example: false
+        type: boolean
+    type: object
+  handler.conversationsResponse:
+    properties:
+      conversations:
+        items:
+          $ref: '#/definitions/handler.conversationResponse'
+        type: array
+      meta:
+        $ref: '#/definitions/handler.conversationsMeta'
+    type: object
+  handler.errorBody:
+    properties:
+      code:
+        description: Code is one of invalid_request, invalid_cursor, not_found, method_not_allowed,
+          internal_error.
+        enum:
+        - invalid_request
+        - invalid_cursor
+        - not_found
+        - method_not_allowed
+        - internal_error
+        example: invalid_cursor
+        type: string
+      description:
+        example: page[before] or page[after] is not the _id of a message in this conversation.
+        type: string
+    type: object
+  handler.errorResponse:
+    properties:
+      error:
+        $ref: '#/definitions/handler.errorBody'
+    type: object
+  handler.messageMetadata:
+    properties:
+      sequence:
+        description: Sequence is the position of the message's event in the conversation.
+          Gaps are normal.
+        example: 2
+        type: integer
+      sourceEvent:
+        description: SourceEvent is the event that produced the message.
+        enum:
+        - UserMessageSent
+        - AgentMessageSent
+        - GuardrailResponseSent
+        example: UserMessageSent
+        type: string
+      truncated:
+        description: Truncated is true when the recorded text was cut at the agent's
+          limit.
+        example: false
+        type: boolean
+    type: object
+  handler.messageResponse:
+    properties:
+      _id:
+        description: 'ID is the message id and the paging cursor: the outbox id of
+          its event, as a string.'
+        example: "1042"
+        type: string
+      authorId:
+        description: AuthorID is the customer account for appUser and ms-ml-genai-agent-bs
+          for appMaker.
+        example: c59f8a80-6e65-4d1b-9c0e-0a1b2c3d4e5f
+        type: string
+      metadata:
+        $ref: '#/definitions/handler.messageMetadata'
+      received:
+        description: Received is when it happened, in Unix seconds with milliseconds
+          as decimals.
+        example: 1.792505243792e+09
+        type: number
+      role:
+        description: 'Role is who wrote it: appUser for the customer, appMaker for
+          the assistant and its guardrail replies.'
+        enum:
+        - appUser
+        - appMaker
+        example: appUser
+        type: string
+      source:
+        $ref: '#/definitions/handler.sourceResponse'
+      text:
+        example: quiero yapear
+        type: string
+      type:
+        description: Type is the message type. Always text for now.
+        example: text
+        type: string
+    type: object
+  handler.messagesMeta:
+    properties:
+      afterCursor:
+        description: AfterCursor is the _id of the last message of the page. Absent
+          for an empty page.
+        example: "1051"
+        type: string
+      beforeCursor:
+        description: BeforeCursor is the _id of the first message of the page. Absent
+          for an empty page.
+        example: "1042"
+        type: string
+      hasMore:
+        description: HasMore is true when older messages exist (newest and before
+          pages) or newer ones exist (after pages).
+        example: true
+        type: boolean
+    type: object
+  handler.messagesResponse:
+    properties:
+      conversation:
+        $ref: '#/definitions/handler.conversationRef'
+      links:
+        $ref: '#/definitions/handler.pageLinks'
+      messages:
+        items:
+          $ref: '#/definitions/handler.messageResponse'
+        type: array
+      meta:
+        $ref: '#/definitions/handler.messagesMeta'
+    type: object
+  handler.pageLinks:
+    properties:
+      next:
+        example: /v1/conversations/conv_v1_8ab59029-bc3c-4e77-b49f-9fb053d90c52/messages?page[after]=1051
+        type: string
+      prev:
+        example: /v1/conversations/conv_v1_8ab59029-bc3c-4e77-b49f-9fb053d90c52/messages?page[before]=1042
+        type: string
+    type: object
+  handler.sourceResponse:
+    properties:
+      type:
+        example: api
+        type: string
+    type: object
+host: localhost:3100
+info:
+  contact: {}
+  description: 'Conversation history of the Yape assistant: the chat between the user
+    and the agent, shaped after the Smooch message. PoC: there is no authentication,
+    so it must not be deployed.'
+  title: ms-ml-conv-history-bs API
+  version: "1.0"
+paths:
+  /health:
+    get:
+      description: Returns 200 when the database answers and 503 when it does not.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.healthResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/api.healthResponse'
+      summary: Health check
+      tags:
+      - Health
+  /v1/conversations:
+    get:
+      description: 'Returns the account''s latest 100 conversations that have chat
+        messages, the most recent first, with their message count and the times of
+        their first and last message. There is no paging: hasMore says there are more
+        than 100.'
+      parameters:
+      - description: 'Customer account (letters, digits, . _ : -, up to 128 characters),
+          sent once'
+        in: query
+        name: idYapeAccount
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handler.conversationsResponse'
+        "400":
+          description: 'invalid_request: the account is missing, malformed or sent
+            twice'
+          schema:
+            $ref: '#/definitions/handler.errorResponse'
+        "500":
+          description: internal_error
+          schema:
+            $ref: '#/definitions/handler.errorResponse'
+      summary: List the conversations of an account
+      tags:
+      - Conversations
+  /v1/conversations/{conversationId}/messages:
+    get:
+      description: 'Returns up to 100 chat messages, oldest first. Without a cursor
+        it returns the newest page. page[before] returns the 100 messages just older
+        than the given message, page[after] the 100 just newer. Send at most one of
+        them, once, with a message _id of this conversation. hasMore and the link
+        follow the direction of travel: links.prev for the newest and before pages
+        when older messages exist, links.next for after pages when newer ones exist.
+        A page past the last message is an empty array.'
+      parameters:
+      - description: 'Conversation id (letters, digits, . _ : -, up to 128 characters)'
+        in: path
+        name: conversationId
+        required: true
+        type: string
+      - description: 'Message _id: read the page of messages older than it'
+        in: query
+        name: page[before]
+        type: string
+      - description: 'Message _id: read the page of messages newer than it'
+        in: query
+        name: page[after]
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handler.messagesResponse'
+        "400":
+          description: invalid_request (malformed id, both cursors, a cursor sent
+            twice) or invalid_cursor (empty, not a plain decimal _id, or not a message
+            of this conversation)
+          schema:
+            $ref: '#/definitions/handler.errorResponse'
+        "404":
+          description: 'not_found: the conversation has no chat messages'
+          schema:
+            $ref: '#/definitions/handler.errorResponse'
+        "500":
+          description: internal_error
+          schema:
+            $ref: '#/definitions/handler.errorResponse'
+      summary: List the messages of a conversation
+      tags:
+      - Messages
+schemes:
+- http
+swagger: "2.0"

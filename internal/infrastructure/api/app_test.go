@@ -1,0 +1,147 @@
+package api
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/labstack/echo/v4"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+
+	"github.com/yaperos/ms-ml-conv-history-bs/internal/core/domain"
+	"github.com/yaperos/ms-ml-conv-history-bs/internal/core/port/service/mocks"
+)
+
+type recordingLog struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (l *recordingLog) add(level, msg string, v ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.lines = append(l.lines, level+" "+fmt.Sprintf(msg, v...))
+}
+
+func (l *recordingLog) Infof(msg string, v ...any)  { l.add("info", msg, v...) }
+func (l *recordingLog) Errorf(msg string, v ...any) { l.add("error", msg, v...) }
+func (l *recordingLog) text() string                { return strings.Join(l.lines, "\n") }
+
+func do(e *echo.Echo, method, target string) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, httptest.NewRequest(method, target, nil))
+
+	return rec
+}
+
+func TestHealth(t *testing.T) {
+	tests := []struct {
+		name       string
+		ping       Pinger
+		wantStatus int
+		wantBody   string
+	}{
+		{name: "databaseAnswers", ping: func(context.Context) error { return nil }, wantStatus: http.StatusOK, wantBody: `{"status":"ok"}`},
+		{name: "noDatabaseCheck", ping: nil, wantStatus: http.StatusOK, wantBody: `{"status":"ok"}`},
+		{name: "databaseDown", ping: func(context.Context) error { return errors.New("connection refused") }, wantStatus: http.StatusServiceUnavailable, wantBody: `{"status":"unavailable"}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := NewServer(mocks.NewHistory(t), &recordingLog{}, tt.ping)
+
+			rec := do(e, http.MethodGet, "/health")
+
+			assert.Equal(t, tt.wantStatus, rec.Code)
+			assert.JSONEq(t, tt.wantBody, rec.Body.String())
+		})
+	}
+}
+
+func TestServerRoutes(t *testing.T) {
+	tests := []struct {
+		name       string
+		target     string
+		expect     func(h *mocks.History)
+		wantStatus int
+	}{
+		{
+			name:   "messagesRoute",
+			target: "/v1/conversations/conv_v1_a/messages",
+			expect: func(h *mocks.History) {
+				h.On("Messages", mock.Anything, mock.Anything).Return(domain.MessagePage{ConversationID: "conv_v1_a"}, nil).Once()
+			},
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:   "conversationsRoute",
+			target: "/v1/conversations?idYapeAccount=acc-1",
+			expect: func(h *mocks.History) {
+				h.On("Conversations", mock.Anything, "acc-1").Return(domain.ConversationList{}, nil).Once()
+			},
+			wantStatus: http.StatusOK,
+		},
+		{name: "unknownRoute", target: "/v2/anything", expect: func(*mocks.History) {}, wantStatus: http.StatusNotFound},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			history := mocks.NewHistory(t)
+			tt.expect(history)
+
+			rec := do(NewServer(history, &recordingLog{}, nil), http.MethodGet, tt.target)
+
+			assert.Equal(t, tt.wantStatus, rec.Code)
+		})
+	}
+}
+
+func TestRequestLogHasTheRouteNotTheValues(t *testing.T) {
+	tests := []struct {
+		name       string
+		target     string
+		wantLine   string
+		wantStatus int
+	}{
+		{name: "routePatternWithoutTheQuery", target: "/v1/conversations?idYapeAccount=acc-secret-1", wantLine: "info GET /v1/conversations 200", wantStatus: http.StatusOK},
+		{name: "pathParameterIsNotLogged", target: "/v1/conversations/conv_secret/messages?page[before]=555", wantLine: "info GET /v1/conversations/:conversationId/messages 200", wantStatus: http.StatusOK},
+		{name: "unmatchedRoute", target: "/nothing/acc-secret-1", wantLine: "info GET unmatched 404", wantStatus: http.StatusNotFound},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			history := mocks.NewHistory(t)
+			history.On("Conversations", mock.Anything, mock.Anything).Return(domain.ConversationList{}, nil).Maybe()
+			history.On("Messages", mock.Anything, mock.Anything).Return(domain.MessagePage{}, nil).Maybe()
+			log := &recordingLog{}
+
+			rec := do(NewServer(history, log, nil), http.MethodGet, tt.target)
+
+			assert.Equal(t, tt.wantStatus, rec.Code)
+			assert.Contains(t, log.text(), tt.wantLine)
+			for _, secret := range []string{"acc-secret-1", "conv_secret", "555"} {
+				assert.NotContains(t, log.text(), secret)
+			}
+		})
+	}
+}
+
+func TestPanicIsAnsweredAndLogged(t *testing.T) {
+	log := &recordingLog{}
+	e := NewServer(mocks.NewHistory(t), log, nil)
+	e.GET("/boom", func(echo.Context) error { panic("something broke") })
+
+	rec := do(e, http.MethodGet, "/boom")
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.Contains(t, rec.Body.String(), `"code":"internal_error"`)
+	assert.NotContains(t, rec.Body.String(), "something broke")
+	assert.Contains(t, log.text(), "error GET /boom failed: something broke")
+	assert.Contains(t, log.text(), "info GET /boom 500")
+}
