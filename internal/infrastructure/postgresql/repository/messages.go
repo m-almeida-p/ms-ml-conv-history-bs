@@ -15,8 +15,8 @@ import (
 )
 
 var (
-	//go:embed SQL/select_cursor_sequence.sql
-	sqlSelectCursorSequence string
+	//go:embed SQL/message_exists.sql
+	sqlMessageExists string
 	//go:embed SQL/conversation_exists.sql
 	sqlConversationExists string
 	//go:embed SQL/list_messages_newest.sql
@@ -44,29 +44,12 @@ func NewMessages(db postgresql.DB) *Messages {
 // ListMessages implements repository.MessageRepository. It reads one row more
 // than a page, which tells whether more exist without a second query.
 func (r *Messages) ListMessages(ctx context.Context, q domain.PageQuery) (domain.Page, error) {
-	limit := domain.PageSize + 1
-
-	var (
-		rows pgx.Rows
-		err  error
-	)
-
-	switch q.Direction {
-	case domain.DirectionNewest:
-		rows, err = r.db.Query(ctx, sqlListMessagesNewest, q.ConversationID, limit)
-	case domain.DirectionBefore, domain.DirectionAfter:
-		sequence, cursorErr := r.cursorSequence(ctx, q)
-		if cursorErr != nil {
-			return domain.Page{}, cursorErr
-		}
-		if q.Direction == domain.DirectionBefore {
-			rows, err = r.db.Query(ctx, sqlListMessagesBefore, q.ConversationID, sequence, limit)
-		} else {
-			rows, err = r.db.Query(ctx, sqlListMessagesAfter, q.ConversationID, sequence, limit)
-		}
-	default:
-		return domain.Page{}, fmt.Errorf("%w: unknown direction %q", domain.ErrInvalidRequest, q.Direction)
+	query, args, err := r.pageQuery(ctx, q)
+	if err != nil {
+		return domain.Page{}, err
 	}
+
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return domain.Page{}, dbError("list messages", err)
 	}
@@ -95,28 +78,51 @@ func (r *Messages) ListMessages(ctx context.Context, q domain.PageQuery) (domain
 	return domain.Page{Messages: messages, HasMore: hasMore}, nil
 }
 
-// cursorSequence finds the stream position of the cursor message. A cursor that
-// is not in the conversation is an unknown conversation when the conversation has
-// no messages, and an invalid cursor otherwise.
-func (r *Messages) cursorSequence(ctx context.Context, q domain.PageQuery) (int, error) {
-	var sequence int
-	err := r.db.QueryRow(ctx, sqlSelectCursorSequence, q.ConversationID, q.CursorSequence).Scan(&sequence)
+// pageQuery chooses the statement and arguments that read the page q asks for.
+// For a page beside a cursor it first checks the cursor.
+func (r *Messages) pageQuery(ctx context.Context, q domain.PageQuery) (string, []any, error) {
+	limit := domain.PageSize + 1
+
+	switch q.Direction {
+	case domain.DirectionNewest:
+		return sqlListMessagesNewest, []any{q.ConversationID, limit}, nil
+	case domain.DirectionBefore, domain.DirectionAfter:
+		if err := r.checkCursor(ctx, q); err != nil {
+			return "", nil, err
+		}
+		query := sqlListMessagesAfter
+		if q.Direction == domain.DirectionBefore {
+			query = sqlListMessagesBefore
+		}
+
+		return query, []any{q.ConversationID, q.CursorSequence, limit}, nil
+	}
+
+	return "", nil, fmt.Errorf("%w: unknown direction %q", domain.ErrInvalidRequest, q.Direction)
+}
+
+// checkCursor confirms that the cursor is a message of the conversation. One that
+// is not is an unknown conversation when the conversation has no messages, and an
+// invalid cursor otherwise.
+func (r *Messages) checkCursor(ctx context.Context, q domain.PageQuery) error {
+	var found int
+	err := r.db.QueryRow(ctx, sqlMessageExists, q.ConversationID, q.CursorSequence).Scan(&found)
 	if err == nil {
-		return sequence, nil
+		return nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
-		return 0, dbError("find cursor", err)
+		return dbError("find cursor", err)
 	}
 
 	var exists bool
 	if err := r.db.QueryRow(ctx, sqlConversationExists, q.ConversationID).Scan(&exists); err != nil {
-		return 0, dbError("check conversation", err)
+		return dbError("check conversation", err)
 	}
 	if !exists {
-		return 0, domain.ErrNotFound
+		return domain.ErrNotFound
 	}
 
-	return 0, domain.ErrInvalidCursor
+	return domain.ErrInvalidCursor
 }
 
 func scanMessages(rows pgx.Rows) ([]domain.Message, error) {

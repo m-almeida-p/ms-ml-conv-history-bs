@@ -73,85 +73,46 @@ type row struct {
 	OccurredAt     *string         `json:"occurred_at"`
 }
 
+// problem is why a record could not be decoded, before it is tied to its record.
+type problem struct {
+	reason Reason
+	field  string
+}
+
+func (p *problem) at(record resource.Message) *DecodeError {
+	return &DecodeError{Topic: record.Topic, Partition: record.Partition, Offset: record.Offset, Reason: p.reason, Field: p.field}
+}
+
 // Decode turns a record into an inbox event. A tombstone (an empty or null
 // value) returns nil without error, since there is nothing to store. Any other
 // problem returns a *DecodeError.
 func Decode(record resource.Message) (*domain.InboxEvent, error) {
-	fail := func(reason Reason, field string) (*domain.InboxEvent, error) {
-		return nil, &DecodeError{Topic: record.Topic, Partition: record.Partition, Offset: record.Offset, Reason: reason, Field: field}
+	body, tombstone, p := unframe(record.Value)
+	if p != nil {
+		return nil, p.at(record)
 	}
-
-	body := record.Value
-	if len(body) > 0 && body[0] == 0 {
-		if len(body) < headerSize {
-			return fail(ReasonHeader, "")
-		}
-		body = body[headerSize:]
-	}
-	body = bytes.TrimSpace(body)
-	if len(body) == 0 || bytes.Equal(body, []byte("null")) {
+	if tombstone {
 		return nil, nil
 	}
 
-	var r row
-	if err := json.Unmarshal(body, &r); err != nil {
-		// The json error can quote part of the value, so it is not passed on; only
-		// the name of a field with the wrong type is kept.
-		var typeErr *json.UnmarshalTypeError
-		if errors.As(err, &typeErr) && typeErr.Field != "" {
-			return fail(ReasonFieldMalformed, typeErr.Field)
-		}
-
-		return fail(ReasonJSON, "")
+	r, p := parseRow(body)
+	if p != nil {
+		return nil, p.at(record)
+	}
+	if p := r.missingField(); p != nil {
+		return nil, p.at(record)
+	}
+	if p := r.outOfRangeField(); p != nil {
+		return nil, p.at(record)
 	}
 
-	switch {
-	case r.ConversationID == nil || *r.ConversationID == "":
-		return fail(ReasonFieldMissing, "conversation_id")
-	case r.Sequence == nil:
-		return fail(ReasonFieldMissing, "sequence")
-	case r.EventName == nil || *r.EventName == "":
-		return fail(ReasonFieldMissing, "event_name")
-	case r.EventVersion == nil:
-		return fail(ReasonFieldMissing, "event_version")
-	case r.OccurredAt == nil:
-		return fail(ReasonFieldMissing, "occurred_at")
+	payload, metadata, p := r.documents()
+	if p != nil {
+		return nil, p.at(record)
 	}
-
-	// Values the columns cannot hold are refused here, so they are skipped like any
-	// malformed record and never reach the database to be retried.
-	switch {
-	case *r.Sequence < 1 || *r.Sequence > math.MaxInt32:
-		return fail(ReasonFieldRange, "sequence")
-	case *r.EventVersion < 1 || *r.EventVersion > math.MaxInt32:
-		return fail(ReasonFieldRange, "event_version")
-	case !domain.ValidIdentifier(*r.ConversationID):
-		// The API serves only ids of this shape; a stored chat outside it could never be asked for.
-		return fail(ReasonFieldRange, "conversation_id")
-	case r.IDYapeAccount != nil && *r.IDYapeAccount != "" && !domain.ValidIdentifier(*r.IDYapeAccount):
-		return fail(ReasonFieldRange, "id_yape_account")
-	case utf8.RuneCountInString(*r.EventName) > maxNameLength:
-		return fail(ReasonFieldRange, "event_name")
-	}
-
-	payload, ok := jsonDocument(r.Payload)
-	if !ok {
-		if len(r.Payload) == 0 || bytes.Equal(r.Payload, []byte("null")) {
-			return fail(ReasonFieldMissing, "payload")
-		}
-		return fail(ReasonPayload, "payload")
-	}
-	metadata, ok := jsonDocument(r.Metadata)
-	if !ok {
-		if len(r.Metadata) == 0 || bytes.Equal(r.Metadata, []byte("null")) {
-			return fail(ReasonFieldMissing, "metadata")
-		}
-		return fail(ReasonMetadata, "metadata")
-	}
-
 	occurredAt, err := time.Parse(time.RFC3339Nano, *r.OccurredAt)
 	if err != nil {
-		return fail(ReasonOccurredAt, "occurred_at")
+		return nil, (&problem{ReasonOccurredAt, "occurred_at"}).at(record)
 	}
 
 	return &domain.InboxEvent{
@@ -169,6 +130,102 @@ func Decode(record resource.Message) (*domain.InboxEvent, error) {
 		KafkaPartition: record.Partition,
 		KafkaOffset:    record.Offset,
 	}, nil
+}
+
+// unframe strips the Schema Registry header, when there is one, and says whether
+// what is left is a tombstone: nothing, or a JSON null.
+func unframe(value []byte) (body []byte, tombstone bool, p *problem) {
+	body = value
+	if len(body) > 0 && body[0] == 0 {
+		if len(body) < headerSize {
+			return nil, false, &problem{ReasonHeader, ""}
+		}
+		body = body[headerSize:]
+	}
+	body = bytes.TrimSpace(body)
+
+	return body, len(body) == 0 || bytes.Equal(body, []byte("null")), nil
+}
+
+func parseRow(body []byte) (row, *problem) {
+	var r row
+	if err := json.Unmarshal(body, &r); err != nil {
+		// The json error can quote part of the value, so it is not passed on; only
+		// the name of a field with the wrong type is kept.
+		var typeErr *json.UnmarshalTypeError
+		if errors.As(err, &typeErr) && typeErr.Field != "" {
+			return row{}, &problem{ReasonFieldMalformed, typeErr.Field}
+		}
+
+		return row{}, &problem{ReasonJSON, ""}
+	}
+
+	return r, nil
+}
+
+// missingField names the first required field the row lacks.
+func (r row) missingField() *problem {
+	switch {
+	case r.ConversationID == nil || *r.ConversationID == "":
+		return &problem{ReasonFieldMissing, "conversation_id"}
+	case r.Sequence == nil:
+		return &problem{ReasonFieldMissing, "sequence"}
+	case r.EventName == nil || *r.EventName == "":
+		return &problem{ReasonFieldMissing, "event_name"}
+	case r.EventVersion == nil:
+		return &problem{ReasonFieldMissing, "event_version"}
+	case r.OccurredAt == nil:
+		return &problem{ReasonFieldMissing, "occurred_at"}
+	}
+
+	return nil
+}
+
+// outOfRangeField names the first field with a value the columns cannot hold or
+// the API could not serve. They are refused here, so they are skipped like any
+// malformed record and never reach the database to be retried.
+func (r row) outOfRangeField() *problem {
+	switch {
+	case *r.Sequence < 1 || *r.Sequence > math.MaxInt32:
+		return &problem{ReasonFieldRange, "sequence"}
+	case *r.EventVersion < 1 || *r.EventVersion > math.MaxInt32:
+		return &problem{ReasonFieldRange, "event_version"}
+	case !domain.ValidIdentifier(*r.ConversationID):
+		return &problem{ReasonFieldRange, "conversation_id"}
+	case r.IDYapeAccount != nil && *r.IDYapeAccount != "" && !domain.ValidIdentifier(*r.IDYapeAccount):
+		return &problem{ReasonFieldRange, "id_yape_account"}
+	case utf8.RuneCountInString(*r.EventName) > maxNameLength:
+		return &problem{ReasonFieldRange, "event_name"}
+	}
+
+	return nil
+}
+
+// documents reads the two JSON columns, the payload first.
+func (r row) documents() (payload, metadata json.RawMessage, p *problem) {
+	payload, p = document(r.Payload, "payload", ReasonPayload)
+	if p != nil {
+		return nil, nil, p
+	}
+	metadata, p = document(r.Metadata, "metadata", ReasonMetadata)
+	if p != nil {
+		return nil, nil, p
+	}
+
+	return payload, metadata, nil
+}
+
+// document reads one JSON column: absent or null is a missing field, anything that
+// is not a JSON object or array is malformed.
+func document(raw json.RawMessage, field string, malformed Reason) (json.RawMessage, *problem) {
+	if doc, ok := jsonDocument(raw); ok {
+		return doc, nil
+	}
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return nil, &problem{ReasonFieldMissing, field}
+	}
+
+	return nil, &problem{malformed, field}
 }
 
 // jsonDocument returns the JSON a field holds. Debezium sends JSONB as a string

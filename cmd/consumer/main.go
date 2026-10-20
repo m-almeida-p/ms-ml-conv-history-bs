@@ -16,6 +16,7 @@ import (
 	"github.com/joho/godotenv"
 
 	"github.com/yaperos/ms-ml-conv-history-bs/internal/config"
+	"github.com/yaperos/ms-ml-conv-history-bs/internal/core/port/service"
 	"github.com/yaperos/ms-ml-conv-history-bs/internal/core/projection"
 	"github.com/yaperos/ms-ml-conv-history-bs/internal/infrastructure/kafka"
 	"github.com/yaperos/ms-ml-conv-history-bs/internal/infrastructure/logging"
@@ -69,24 +70,32 @@ func run(args []string, log *logging.Logger) error {
 	projector := projection.NewService(repository.NewInbox(pool))
 
 	if command == "rebuild" {
-		result, err := projector.Rebuild(ctx)
-		if err != nil {
-			return err
-		}
-		log.Infof("rebuilt the chat messages: events=%d messages=%d invalid=%d", result.Events, result.Messages, result.Invalid)
-
-		return nil
+		return rebuild(ctx, projector, log)
 	}
 
-	for _, warning := range cfg.Kafka.Warnings() {
-		log.Warnf("%s", warning)
-	}
+	return consume(ctx, cfg.Kafka, projector, log)
+}
 
-	source, err := kafka.NewSource(cfg.Kafka)
+func rebuild(ctx context.Context, projector service.Projection, log *logging.Logger) error {
+	result, err := projector.Rebuild(ctx)
 	if err != nil {
 		return err
 	}
-	log.Infof("consuming %s as group %s", cfg.Kafka.Topic, cfg.Kafka.GroupID)
+	log.Infof("rebuilt the chat messages: events=%d messages=%d invalid=%d", result.Events, result.Messages, result.Invalid)
+
+	return nil
+}
+
+func consume(ctx context.Context, cfg config.KafkaConfig, projector service.Projection, log *logging.Logger) error {
+	for _, warning := range cfg.Warnings() {
+		log.Warnf("%s", warning)
+	}
+
+	source, err := kafka.NewSource(cfg)
+	if err != nil {
+		return err
+	}
+	log.Infof("consuming %s as group %s", cfg.Topic, cfg.GroupID)
 
 	return kafka.NewConsumer(source, projector, log).Run(ctx)
 }

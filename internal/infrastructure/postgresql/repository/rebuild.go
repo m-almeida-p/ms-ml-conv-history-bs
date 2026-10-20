@@ -37,28 +37,9 @@ func (r *Inbox) Rebuild(ctx context.Context, project func(domain.InboxEvent) (*d
 		}
 
 		for _, event := range batch {
-			// A cancelled context stops the replay at the next event.
-			if err := ctx.Err(); err != nil {
-				return domain.RebuildResult{}, fmt.Errorf("replay stopped at event %s: %w", event.Ref(), err)
+			if err := replayEvent(ctx, tx, project, event, &result); err != nil {
+				return domain.RebuildResult{}, err
 			}
-
-			result.Events++
-
-			message, err := project(event)
-			switch {
-			case errors.Is(err, domain.ErrInvalidEvent):
-				result.Invalid++
-				continue
-			case err != nil:
-				return domain.RebuildResult{}, fmt.Errorf("project event %s: %w", event.Ref(), err)
-			case message == nil:
-				continue
-			}
-
-			if err := upsertMessage(ctx, tx, *message); err != nil {
-				return domain.RebuildResult{}, dbError(fmt.Sprintf("upsert message of event %s", event.Ref()), err)
-			}
-			result.Messages++
 		}
 
 		if len(batch) < r.batchSize {
@@ -73,6 +54,35 @@ func (r *Inbox) Rebuild(ctx context.Context, project func(domain.InboxEvent) (*d
 	}
 
 	return result, nil
+}
+
+// replayEvent projects one inbox event and writes its message, counting what it
+// did. A cancelled context stops the replay at the next event.
+func replayEvent(ctx context.Context, tx pgx.Tx, project func(domain.InboxEvent) (*domain.Message, error), event domain.InboxEvent, result *domain.RebuildResult) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("replay stopped at event %s: %w", event.Ref(), err)
+	}
+
+	result.Events++
+
+	message, err := project(event)
+	switch {
+	case errors.Is(err, domain.ErrInvalidEvent):
+		result.Invalid++
+
+		return nil
+	case err != nil:
+		return fmt.Errorf("project event %s: %w", event.Ref(), err)
+	case message == nil:
+		return nil
+	}
+
+	if err := upsertMessage(ctx, tx, *message); err != nil {
+		return dbError(fmt.Sprintf("upsert message of event %s", event.Ref()), err)
+	}
+	result.Messages++
+
+	return nil
 }
 
 // readBatch returns the next inbox events after (conversationID, sequence). The
