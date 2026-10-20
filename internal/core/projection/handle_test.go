@@ -19,7 +19,7 @@ func TestHandle(t *testing.T) {
 	at := time.Date(2026, 10, 20, 14, 0, 0, 0, time.UTC)
 	event := func(name, payload string) domain.InboxEvent {
 		return domain.InboxEvent{
-			OutboxID: 5, ConversationID: "conv", Sequence: 2, EventName: name, Payload: json.RawMessage(payload),
+			ConversationID: "conv", Sequence: 2, EventName: name, Payload: json.RawMessage(payload),
 			IDYapeAccount: "acc-1", OccurredAt: at,
 		}
 	}

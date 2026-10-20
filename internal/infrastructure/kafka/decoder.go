@@ -1,4 +1,4 @@
-// Package kafka reads the outbox topic and turns its records into inbox events.
+// Package kafka reads the conversation events topic and turns its records into inbox events.
 package kafka
 
 import (
@@ -27,7 +27,7 @@ const (
 	ReasonJSON           Reason = "value is not a JSON object"
 	ReasonPayload        Reason = "payload is not valid JSON"
 	ReasonMetadata       Reason = "metadata is not valid JSON"
-	ReasonCreatedAt      Reason = "created_at is not an RFC 3339 time"
+	ReasonOccurredAt     Reason = "occurred_at is not an RFC 3339 time"
 	ReasonFieldMissing   Reason = "a required field is missing"
 	ReasonFieldMalformed Reason = "a field has the wrong type"
 	ReasonFieldRange     Reason = "a field has a value the history cannot hold"
@@ -54,14 +54,13 @@ func (e *DecodeError) Error() string {
 	return fmt.Sprintf("decode record %s/%d/%d: %s%s", e.Topic, e.Partition, e.Offset, e.Reason, field)
 }
 
-// maxNameLength is the size of the VARCHAR columns that hold ids and names.
+// maxNameLength is the size of the VARCHAR column that holds an event name.
 const maxNameLength = 128
 
-// row is the flat outbox row Debezium publishes. Required fields are pointers so
-// an absent key differs from a zero value. Unknown fields, such as published,
-// are ignored.
+// row is the flat conversation_events row Debezium publishes. Required fields are
+// pointers so an absent key differs from a zero value. Unknown fields, such as a
+// column added later, are ignored.
 type row struct {
-	ID             *int64          `json:"id"`
 	ConversationID *string         `json:"conversation_id"`
 	Sequence       *int            `json:"sequence"`
 	EventName      *string         `json:"event_name"`
@@ -71,7 +70,7 @@ type row struct {
 	CorrelationID  *string         `json:"correlation_id"`
 	IDYapeAccount  *string         `json:"id_yape_account"`
 	Actor          *string         `json:"actor"`
-	CreatedAt      *string         `json:"created_at"`
+	OccurredAt     *string         `json:"occurred_at"`
 }
 
 // Decode turns a record into an inbox event. A tombstone (an empty or null
@@ -107,8 +106,6 @@ func Decode(record resource.Message) (*domain.InboxEvent, error) {
 	}
 
 	switch {
-	case r.ID == nil:
-		return fail(ReasonFieldMissing, "id")
 	case r.ConversationID == nil || *r.ConversationID == "":
 		return fail(ReasonFieldMissing, "conversation_id")
 	case r.Sequence == nil:
@@ -117,21 +114,22 @@ func Decode(record resource.Message) (*domain.InboxEvent, error) {
 		return fail(ReasonFieldMissing, "event_name")
 	case r.EventVersion == nil:
 		return fail(ReasonFieldMissing, "event_version")
-	case r.CreatedAt == nil:
-		return fail(ReasonFieldMissing, "created_at")
+	case r.OccurredAt == nil:
+		return fail(ReasonFieldMissing, "occurred_at")
 	}
 
 	// Values the columns cannot hold are refused here, so they are skipped like any
 	// malformed record and never reach the database to be retried.
 	switch {
-	case *r.ID < 1:
-		return fail(ReasonFieldRange, "id")
 	case *r.Sequence < 1 || *r.Sequence > math.MaxInt32:
 		return fail(ReasonFieldRange, "sequence")
 	case *r.EventVersion < 1 || *r.EventVersion > math.MaxInt32:
 		return fail(ReasonFieldRange, "event_version")
-	case utf8.RuneCountInString(*r.ConversationID) > maxNameLength:
+	case !domain.ValidIdentifier(*r.ConversationID):
+		// The API serves only ids of this shape; a stored chat outside it could never be asked for.
 		return fail(ReasonFieldRange, "conversation_id")
+	case r.IDYapeAccount != nil && *r.IDYapeAccount != "" && !domain.ValidIdentifier(*r.IDYapeAccount):
+		return fail(ReasonFieldRange, "id_yape_account")
 	case utf8.RuneCountInString(*r.EventName) > maxNameLength:
 		return fail(ReasonFieldRange, "event_name")
 	}
@@ -151,13 +149,12 @@ func Decode(record resource.Message) (*domain.InboxEvent, error) {
 		return fail(ReasonMetadata, "metadata")
 	}
 
-	occurredAt, err := time.Parse(time.RFC3339Nano, *r.CreatedAt)
+	occurredAt, err := time.Parse(time.RFC3339Nano, *r.OccurredAt)
 	if err != nil {
-		return fail(ReasonCreatedAt, "created_at")
+		return fail(ReasonOccurredAt, "occurred_at")
 	}
 
 	return &domain.InboxEvent{
-		OutboxID:       *r.ID,
 		ConversationID: *r.ConversationID,
 		Sequence:       *r.Sequence,
 		EventName:      *r.EventName,

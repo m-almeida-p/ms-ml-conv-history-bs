@@ -39,7 +39,7 @@ func TestRebuild(t *testing.T) {
 	events := stream()
 	// Event 7 should project but has no text: it stays in the inbox and adds no message.
 	broken := events[1]
-	broken.OutboxID, broken.Sequence, broken.Payload = 7, 7, json.RawMessage(`{"message_id": "m-9"}`)
+	broken.Sequence, broken.Payload = 7, json.RawMessage(`{"message_id": "m-9"}`)
 	withBroken := append(append([]domain.InboxEvent{}, events...), broken)
 
 	load(t, withBroken)
@@ -54,7 +54,7 @@ func TestRebuild(t *testing.T) {
 		}{
 			{name: "messagesWereEmptied", damage: "DELETE FROM conversation_messages"},
 			{name: "aTextWasWrong", damage: "UPDATE conversation_messages SET text = 'wrong', role = 'appMaker'"},
-			{name: "aStrayRowExisted", damage: "INSERT INTO conversation_messages (conversation_id, sequence, outbox_id, role, author_id, text, source_event, received_at) VALUES ('stray', 1, 500, 'appUser', 'a', 't', 'E', now())"},
+			{name: "aStrayRowExisted", damage: "INSERT INTO conversation_messages (conversation_id, sequence, role, author_id, text, source_event, received_at) VALUES ('stray', 1, 'appUser', 'a', 't', 'E', now())"},
 			{name: "nothingWasWrong", damage: "SELECT 1"},
 		}
 

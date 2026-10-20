@@ -68,7 +68,7 @@ func (r *Messages) ListMessages(ctx context.Context, q domain.PageQuery) (domain
 		return domain.Page{}, fmt.Errorf("%w: unknown direction %q", domain.ErrInvalidRequest, q.Direction)
 	}
 	if err != nil {
-		return domain.Page{}, fmt.Errorf("list messages: %w", err)
+		return domain.Page{}, dbError("list messages", err)
 	}
 
 	messages, err := scanMessages(rows)
@@ -100,17 +100,17 @@ func (r *Messages) ListMessages(ctx context.Context, q domain.PageQuery) (domain
 // no messages, and an invalid cursor otherwise.
 func (r *Messages) cursorSequence(ctx context.Context, q domain.PageQuery) (int, error) {
 	var sequence int
-	err := r.db.QueryRow(ctx, sqlSelectCursorSequence, q.ConversationID, q.CursorID).Scan(&sequence)
+	err := r.db.QueryRow(ctx, sqlSelectCursorSequence, q.ConversationID, q.CursorSequence).Scan(&sequence)
 	if err == nil {
 		return sequence, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
-		return 0, fmt.Errorf("find cursor: %w", err)
+		return 0, dbError("find cursor", err)
 	}
 
 	var exists bool
 	if err := r.db.QueryRow(ctx, sqlConversationExists, q.ConversationID).Scan(&exists); err != nil {
-		return 0, fmt.Errorf("check conversation: %w", err)
+		return 0, dbError("check conversation", err)
 	}
 	if !exists {
 		return 0, domain.ErrNotFound
@@ -129,15 +129,15 @@ func scanMessages(rows pgx.Rows) ([]domain.Message, error) {
 			role    string
 			account *string
 		)
-		if err := rows.Scan(&m.ConversationID, &m.Sequence, &m.OutboxID, &role, &m.AuthorID, &m.Type, &m.Text,
+		if err := rows.Scan(&m.ConversationID, &m.Sequence, &role, &m.AuthorID, &m.Type, &m.Text,
 			&m.Truncated, &m.SourceEvent, &account, &m.ReceivedAt); err != nil {
-			return nil, fmt.Errorf("scan message: %w", err)
+			return nil, dbError("scan message", err)
 		}
 		m.Role, m.IDYapeAccount = domain.Role(role), value(account)
 		messages = append(messages, m)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list messages: %w", err)
+		return nil, dbError("list messages", err)
 	}
 
 	return messages, nil
@@ -147,7 +147,7 @@ func scanMessages(rows pgx.Rows) ([]domain.Message, error) {
 func (r *Messages) ListConversations(ctx context.Context, idYapeAccount string) (domain.ConversationList, error) {
 	rows, err := r.db.Query(ctx, sqlListConversations, idYapeAccount, domain.ConversationListSize+1)
 	if err != nil {
-		return domain.ConversationList{}, fmt.Errorf("list conversations: %w", err)
+		return domain.ConversationList{}, dbError("list conversations", err)
 	}
 	defer rows.Close()
 
@@ -155,12 +155,12 @@ func (r *Messages) ListConversations(ctx context.Context, idYapeAccount string) 
 	for rows.Next() {
 		var c domain.ConversationSummary
 		if err := rows.Scan(&c.ConversationID, &c.MessageCount, &c.FirstReceivedAt, &c.LastReceivedAt); err != nil {
-			return domain.ConversationList{}, fmt.Errorf("scan conversation: %w", err)
+			return domain.ConversationList{}, dbError("scan conversation", err)
 		}
 		list.Conversations = append(list.Conversations, c)
 	}
 	if err := rows.Err(); err != nil {
-		return domain.ConversationList{}, fmt.Errorf("list conversations: %w", err)
+		return domain.ConversationList{}, dbError("list conversations", err)
 	}
 
 	list.HasMore = len(list.Conversations) > domain.ConversationListSize

@@ -24,7 +24,7 @@ func ptr(s string) *string { return &s }
 func TestServerAnswersTheSameWhenRequestsArriveAtOnce(t *testing.T) {
 	at := time.Date(2026, 10, 20, 14, 7, 23, 0, time.UTC)
 	message := func(id int64) domain.Message {
-		return domain.Message{ConversationID: "conv_a", Sequence: int(id), OutboxID: id, Role: domain.RoleUser, AuthorID: "acc-1", Type: "text", Text: "hola", SourceEvent: "UserMessageSent", ReceivedAt: at}
+		return domain.Message{ConversationID: "conv_a", Sequence: int(id), Role: domain.RoleUser, AuthorID: "acc-1", Type: "text", Text: "hola", SourceEvent: "UserMessageSent", ReceivedAt: at}
 	}
 	page := func(direction domain.Direction, ids ...int64) domain.MessagePage {
 		messages := concurrent.Map(ids, message)

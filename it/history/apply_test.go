@@ -24,10 +24,10 @@ func stream() []domain.InboxEvent {
 	at := time.Date(2026, 10, 20, 14, 0, 0, 0, time.UTC)
 	event := func(seq int, name, payload string) domain.InboxEvent {
 		return domain.InboxEvent{
-			OutboxID: int64(seq), ConversationID: conversation, Sequence: seq, EventName: name, EventVersion: 1,
+			ConversationID: conversation, Sequence: seq, EventName: name, EventVersion: 1,
 			Payload: json.RawMessage(payload), Metadata: json.RawMessage(`{}`), IDYapeAccount: "acc-1", Actor: "user",
 			OccurredAt: at.Add(time.Duration(seq) * time.Second),
-			KafkaTopic: "yape.public.conversation_outbox", KafkaPartition: int32(seq % 3), KafkaOffset: int64(seq),
+			KafkaTopic: "yape.public.conversation_events", KafkaPartition: int32(seq % 3), KafkaOffset: int64(seq),
 		}
 	}
 
@@ -56,7 +56,7 @@ func digest(t *testing.T, pool *pgxpool.Pool) (inbox, messages string) {
 
 	ctx := context.Background()
 	require.NoError(t, pool.QueryRow(ctx, `
-		SELECT COALESCE(md5(string_agg(concat_ws('|', outbox_id, conversation_id, sequence, event_name, event_version, payload::text,
+		SELECT COALESCE(md5(string_agg(concat_ws('|', conversation_id, sequence, event_name, event_version, payload::text,
 			metadata::text, correlation_id, id_yape_account, actor, occurred_at, kafka_topic, kafka_partition, kafka_offset,
 			projected_at IS NOT NULL), E'\n' ORDER BY conversation_id, sequence)), '')
 		FROM conversation_inbox`).Scan(&inbox))
@@ -179,9 +179,9 @@ func TestApply(t *testing.T) {
 		message, err := projector.Project(good)
 		require.NoError(t, err)
 
-		stream := pick(events, 3)[0]
-		sameStreamOtherID := stream
-		sameStreamOtherID.OutboxID = 99
+		earlier := pick(events, 3)[0]
+		withNUL := *message
+		withNUL.Text = "a\x00b"
 
 		tests := []struct {
 			name    string
@@ -201,10 +201,11 @@ func TestApply(t *testing.T) {
 				wantErr: "conversation_messages_role_check",
 			},
 			{
-				name:    "sameStreamWithAnotherOutboxID",
-				event:   sameStreamOtherID,
-				prior:   []domain.InboxEvent{stream},
-				wantErr: "conversation_inbox_stream_key",
+				name:    "aNULCharacterFailsTheMessageInsertAndKeepsTheEarlierEvent",
+				event:   good,
+				message: &withNUL,
+				prior:   []domain.InboxEvent{earlier},
+				wantErr: "data the store cannot hold",
 			},
 		}
 
@@ -227,16 +228,22 @@ func TestApply(t *testing.T) {
 		}
 	})
 
-	t.Run("anotherEventWithAnUsedIDIsRefusedNotLost", func(t *testing.T) {
+	t.Run("anotherEventAtAUsedPositionIsRefusedNotLost", func(t *testing.T) {
 		tests := []struct {
 			name         string
-			conversation string
-			sequence     int
+			change       func(e *domain.InboxEvent)
 			wantRejected bool
 		}{
-			{name: "theSameEvent", conversation: conversation, sequence: 2},
-			{name: "sameConversationOtherPosition", conversation: conversation, sequence: 99, wantRejected: true},
-			{name: "otherConversationSamePosition", conversation: "conv_other", sequence: 2, wantRejected: true},
+			{name: "theSameEvent", change: func(e *domain.InboxEvent) {}},
+			{name: "theSamePayloadWrittenWithOtherSpacing", change: func(e *domain.InboxEvent) { e.Payload = json.RawMessage(`{"text":"quiero yapear"}`) }},
+			{name: "anotherPayload", change: func(e *domain.InboxEvent) { e.Payload = json.RawMessage(`{"text": "otro"}`) }, wantRejected: true},
+			{name: "anotherEventName", change: func(e *domain.InboxEvent) { e.EventName = "AgentMessageSent" }, wantRejected: true},
+			{name: "anotherEventVersion", change: func(e *domain.InboxEvent) { e.EventVersion = 2 }, wantRejected: true},
+			{name: "anotherMetadata", change: func(e *domain.InboxEvent) { e.Metadata = json.RawMessage(`{"actor": "agent"}`) }, wantRejected: true},
+			{name: "anotherAccount", change: func(e *domain.InboxEvent) { e.IDYapeAccount = "acc-2" }, wantRejected: true},
+			{name: "noAccountWhereThereWasOne", change: func(e *domain.InboxEvent) { e.IDYapeAccount = "" }, wantRejected: true},
+			{name: "anotherActor", change: func(e *domain.InboxEvent) { e.Actor = "agent" }, wantRejected: true},
+			{name: "aCorrelationIDWhereThereWasNone", change: func(e *domain.InboxEvent) { e.CorrelationID = "corr-1" }, wantRejected: true},
 		}
 
 		for _, tt := range tests {
@@ -246,12 +253,13 @@ func TestApply(t *testing.T) {
 				applyAll(t, []domain.InboxEvent{first})
 				inboxBefore, messagesBefore := digest(t, pool)
 
-				reused := first
-				reused.ConversationID, reused.Sequence = tt.conversation, tt.sequence
-				result, err := repo.Apply(ctx, reused, nil)
+				again := first
+				tt.change(&again)
+				result, err := repo.Apply(ctx, again, nil)
 
 				if tt.wantRejected {
 					require.ErrorIs(t, err, domain.ErrRejected)
+					assert.Contains(t, err.Error(), "already holds another event")
 				} else {
 					require.NoError(t, err)
 				}
@@ -263,7 +271,7 @@ func TestApply(t *testing.T) {
 		}
 	})
 
-	t.Run("repeatKeepsTheFirstCopy", func(t *testing.T) {
+	t.Run("aChangedRepeatIsRefusedAndTheFirstCopyStays", func(t *testing.T) {
 		reset(t)
 		first := pick(events, 2)[0]
 		applyAll(t, []domain.InboxEvent{first})
@@ -274,10 +282,10 @@ func TestApply(t *testing.T) {
 		require.NoError(t, err)
 		result, err := repo.Apply(ctx, changed, message)
 
-		require.NoError(t, err)
+		require.ErrorIs(t, err, domain.ErrRejected)
 		assert.False(t, result.Applied)
 		var text string
-		require.NoError(t, pool.QueryRow(ctx, "SELECT text FROM conversation_messages WHERE outbox_id = 2").Scan(&text))
+		require.NoError(t, pool.QueryRow(ctx, "SELECT text FROM conversation_messages WHERE sequence = 2").Scan(&text))
 		assert.Equal(t, "quiero yapear", text, fmt.Sprintf("the stored message %q is the first one", text))
 	})
 }

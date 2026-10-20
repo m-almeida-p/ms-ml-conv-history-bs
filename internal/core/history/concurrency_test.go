@@ -18,9 +18,9 @@ import (
 func TestServiceAnswersTheSameWhenCalledAtOnce(t *testing.T) {
 	repo := mocks.NewMessageRepository(t)
 	repo.On("ListMessages", mock.Anything, domain.PageQuery{ConversationID: "conv", Direction: domain.DirectionNewest}).
-		Return(domain.Page{Messages: messagesWithIDs(7, 8, 9), HasMore: true}, nil).Maybe()
-	repo.On("ListMessages", mock.Anything, domain.PageQuery{ConversationID: "conv", Direction: domain.DirectionBefore, CursorID: 7}).
-		Return(domain.Page{Messages: messagesWithIDs(5, 6)}, nil).Maybe()
+		Return(domain.Page{Messages: messagesAt(7, 8, 9), HasMore: true}, nil).Maybe()
+	repo.On("ListMessages", mock.Anything, domain.PageQuery{ConversationID: "conv", Direction: domain.DirectionBefore, CursorSequence: 7}).
+		Return(domain.Page{Messages: messagesAt(5, 6)}, nil).Maybe()
 	repo.On("ListConversations", mock.Anything, "acc").
 		Return(domain.ConversationList{Conversations: []domain.ConversationSummary{{ConversationID: "conv", MessageCount: 3}}}, nil).Maybe()
 	svc := NewService(repo)

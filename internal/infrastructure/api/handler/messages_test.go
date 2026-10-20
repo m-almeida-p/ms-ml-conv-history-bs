@@ -18,18 +18,18 @@ import (
 func TestMessages(t *testing.T) {
 	received := time.Date(2026, 10, 20, 14, 7, 23, 792_000_000, time.UTC) // 1792505243.792
 	user := domain.Message{
-		ConversationID: "conv_v1_a", Sequence: 2, OutboxID: 1042, Role: domain.RoleUser, AuthorID: "acc-1", Type: "text",
+		ConversationID: "conv_v1_a", Sequence: 2, Role: domain.RoleUser, AuthorID: "acc-1", Type: "text",
 		Text: "quiero yapear", SourceEvent: "UserMessageSent", ReceivedAt: received,
 	}
 	agent := domain.Message{
-		ConversationID: "conv_v1_a", Sequence: 3, OutboxID: 1043, Role: domain.RoleMaker, AuthorID: "ms-ml-genai-agent-bs", Type: "text",
+		ConversationID: "conv_v1_a", Sequence: 3, Role: domain.RoleMaker, AuthorID: "ms-ml-genai-agent-bs", Type: "text",
 		Text: "¿A quién?", Truncated: true, SourceEvent: "AgentMessageSent", ReceivedAt: received,
 	}
 	storeDown := errors.New("connection reset: password=hunter2")
 
-	userJSON := `{"_id":"1042","type":"text","role":"appUser","authorId":"acc-1","text":"quiero yapear","received":1792505243.792,
+	userJSON := `{"_id":"2","type":"text","role":"appUser","authorId":"acc-1","text":"quiero yapear","received":1792505243.792,
 		"source":{"type":"api"},"metadata":{"sequence":2,"sourceEvent":"UserMessageSent","truncated":false}}`
-	agentJSON := `{"_id":"1043","type":"text","role":"appMaker","authorId":"ms-ml-genai-agent-bs","text":"¿A quién?","received":1792505243.792,
+	agentJSON := `{"_id":"3","type":"text","role":"appMaker","authorId":"ms-ml-genai-agent-bs","text":"¿A quién?","received":1792505243.792,
 		"source":{"type":"api"},"metadata":{"sequence":3,"sourceEvent":"AgentMessageSent","truncated":true}}`
 
 	tests := []struct {
@@ -48,25 +48,25 @@ func TestMessages(t *testing.T) {
 			wantReq: service.MessagesRequest{ConversationID: "conv_v1_a"},
 			page: domain.MessagePage{
 				ConversationID: "conv_v1_a", Direction: domain.DirectionNewest, Messages: []domain.Message{user, agent},
-				HasMore: true, BeforeCursor: "1042", AfterCursor: "1043",
+				HasMore: true, BeforeCursor: "2", AfterCursor: "3",
 			},
 			wantStatus: http.StatusOK,
 			wantJSON: `{"conversation":{"_id":"conv_v1_a"},"messages":[` + userJSON + `,` + agentJSON + `],
-				"meta":{"hasMore":true,"beforeCursor":"1042","afterCursor":"1043"},
-				"links":{"prev":"/v1/conversations/conv_v1_a/messages?page[before]=1042"}}`,
+				"meta":{"hasMore":true,"beforeCursor":"2","afterCursor":"3"},
+				"links":{"prev":"/v1/conversations/conv_v1_a/messages?page[before]=2"}}`,
 		},
 		{
 			name:    "pageBeforeACursorPassesItAndLinksBack",
-			target:  "/v1/conversations/conv_v1_a/messages?page%5Bbefore%5D=1042",
-			wantReq: service.MessagesRequest{ConversationID: "conv_v1_a", Before: ptr("1042")},
+			target:  "/v1/conversations/conv_v1_a/messages?page%5Bbefore%5D=2",
+			wantReq: service.MessagesRequest{ConversationID: "conv_v1_a", Before: ptr("2")},
 			page: domain.MessagePage{
 				ConversationID: "conv_v1_a", Direction: domain.DirectionBefore, Messages: []domain.Message{user},
-				HasMore: true, BeforeCursor: "1042", AfterCursor: "1042",
+				HasMore: true, BeforeCursor: "2", AfterCursor: "2",
 			},
 			wantStatus: http.StatusOK,
 			wantJSON: `{"conversation":{"_id":"conv_v1_a"},"messages":[` + userJSON + `],
-				"meta":{"hasMore":true,"beforeCursor":"1042","afterCursor":"1042"},
-				"links":{"prev":"/v1/conversations/conv_v1_a/messages?page[before]=1042"}}`,
+				"meta":{"hasMore":true,"beforeCursor":"2","afterCursor":"2"},
+				"links":{"prev":"/v1/conversations/conv_v1_a/messages?page[before]=2"}}`,
 		},
 		{
 			name:    "pageAfterACursorWithMoreNewerMessagesLinksForward",
@@ -74,12 +74,12 @@ func TestMessages(t *testing.T) {
 			wantReq: service.MessagesRequest{ConversationID: "conv_v1_a", After: ptr("1040")},
 			page: domain.MessagePage{
 				ConversationID: "conv_v1_a", Direction: domain.DirectionAfter, Messages: []domain.Message{agent},
-				HasMore: true, BeforeCursor: "1043", AfterCursor: "1043",
+				HasMore: true, BeforeCursor: "3", AfterCursor: "3",
 			},
 			wantStatus: http.StatusOK,
 			wantJSON: `{"conversation":{"_id":"conv_v1_a"},"messages":[` + agentJSON + `],
-				"meta":{"hasMore":true,"beforeCursor":"1043","afterCursor":"1043"},
-				"links":{"next":"/v1/conversations/conv_v1_a/messages?page[after]=1043"}}`,
+				"meta":{"hasMore":true,"beforeCursor":"3","afterCursor":"3"},
+				"links":{"next":"/v1/conversations/conv_v1_a/messages?page[after]=3"}}`,
 		},
 		{
 			name:    "lastPageHasNoLinks",
@@ -87,16 +87,16 @@ func TestMessages(t *testing.T) {
 			wantReq: service.MessagesRequest{ConversationID: "conv_v1_a"},
 			page: domain.MessagePage{
 				ConversationID: "conv_v1_a", Direction: domain.DirectionNewest, Messages: []domain.Message{user},
-				BeforeCursor: "1042", AfterCursor: "1042",
+				BeforeCursor: "2", AfterCursor: "2",
 			},
 			wantStatus: http.StatusOK,
 			wantJSON: `{"conversation":{"_id":"conv_v1_a"},"messages":[` + userJSON + `],
-				"meta":{"hasMore":false,"beforeCursor":"1042","afterCursor":"1042"},"links":{}}`,
+				"meta":{"hasMore":false,"beforeCursor":"2","afterCursor":"2"},"links":{}}`,
 		},
 		{
 			name:       "emptyPageIsAnEmptyArrayWithoutCursors",
-			target:     "/v1/conversations/conv_v1_a/messages?page[after]=1043",
-			wantReq:    service.MessagesRequest{ConversationID: "conv_v1_a", After: ptr("1043")},
+			target:     "/v1/conversations/conv_v1_a/messages?page[after]=3",
+			wantReq:    service.MessagesRequest{ConversationID: "conv_v1_a", After: ptr("3")},
 			page:       domain.MessagePage{ConversationID: "conv_v1_a", Direction: domain.DirectionAfter},
 			wantStatus: http.StatusOK,
 			wantJSON:   `{"conversation":{"_id":"conv_v1_a"},"messages":[],"meta":{"hasMore":false},"links":{}}`,

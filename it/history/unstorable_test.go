@@ -25,7 +25,7 @@ func TestApplyRefusesWhatTheStoreCannotHold(t *testing.T) {
 
 	valid := func() domain.InboxEvent {
 		return domain.InboxEvent{
-			OutboxID: 1, ConversationID: "conv", Sequence: 1, EventName: "UserMessageSent", EventVersion: 1,
+			ConversationID: "conv", Sequence: 1, EventName: "UserMessageSent", EventVersion: 1,
 			Payload: json.RawMessage(`{"text":"hola"}`), Metadata: json.RawMessage(`{}`), OccurredAt: time.Now().UTC(),
 			KafkaTopic: "t",
 		}

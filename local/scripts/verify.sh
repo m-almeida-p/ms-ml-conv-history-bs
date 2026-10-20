@@ -3,7 +3,7 @@
 # (ml-genai-agents-bs-testing: cmd/p2p-explore/scripts/run.sh --flow <flow>) and a
 # consumer run have filled both. It prints one line per conversation and ends with
 # OK or MISMATCH (exit 0 or 1). It checks:
-#   1. every outbox row is in the inbox;
+#   1. every event of the event store is in the inbox;
 #   2. per conversation, the history holds exactly the user, agent and guardrail
 #      messages of the event store, with the same text, event and position;
 #   3. no text of a blocked input, a tool summary or a notification is in the history
@@ -27,20 +27,18 @@ note() { echo "  MISMATCH: $*"; mismatches=$((mismatches + 1)); }
 
 CHAT="'UserMessageSent','AgentMessageSent','GuardrailResponseSent'"
 
-echo "== 1. Pipeline: event store -> outbox -> inbox"
+echo "== 1. Pipeline: event store -> inbox"
 events="$(psql_q -c 'select count(*) from conversation_events')"
 [[ "${events}" -gt 0 ]] || { echo "No events in the event store. Run the explorer flows first."; exit 2; }
 
 for ((i = 0; i < WAIT_SECONDS; i += 2)); do
-  missing="$(psql_q -c 'select count(*) from conversation_outbox o left join conversation_inbox i on i.outbox_id = o.id where i.outbox_id is null')"
+  missing="$(psql_q -c 'select count(*) from conversation_events e left join conversation_inbox i using (conversation_id, sequence) where i.sequence is null')"
   [[ "${missing}" -eq 0 ]] && break
   sleep 2
 done
-outbox="$(psql_q -c 'select count(*) from conversation_outbox')"
 inbox="$(psql_q -c 'select count(*) from conversation_inbox')"
-echo "  events=${events} outbox=${outbox} inbox=${inbox} outbox-rows-missing-from-inbox=${missing}"
-[[ "${events}" -eq "${outbox}" ]] || note "events and outbox differ"
-[[ "${missing}" -eq 0 ]] || note "${missing} outbox rows never reached the inbox (is the consumer running?)"
+echo "  events=${events} inbox=${inbox} events-missing-from-inbox=${missing}"
+[[ "${missing}" -eq 0 ]] || note "${missing} events never reached the inbox (is the consumer running?)"
 
 echo
 echo "== 2. Per conversation: event store vs history vs API"

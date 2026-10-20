@@ -22,11 +22,11 @@ func TestProjectionGivesTheSameWhenEventsAreProjectedAtOnce(t *testing.T) {
 	svc := NewService(inbox)
 
 	events := []domain.InboxEvent{
-		{OutboxID: 1, ConversationID: "c", Sequence: 1, EventName: "UserMessageSent", Payload: json.RawMessage(`{"text": "hola"}`), IDYapeAccount: "acc"},
-		{OutboxID: 2, ConversationID: "c", Sequence: 2, EventName: "AgentMessageSent", Payload: json.RawMessage(`{"text": "¿qué tal?", "truncated": true}`)},
-		{OutboxID: 3, ConversationID: "c", Sequence: 3, EventName: "GuardrailResponseSent", Payload: json.RawMessage(`{"response_text": "no"}`)},
-		{OutboxID: 4, ConversationID: "c", Sequence: 4, EventName: "ToolActionSummarized", Payload: json.RawMessage(`{}`)},
-		{OutboxID: 5, ConversationID: "c", Sequence: 5, EventName: "UserMessageSent", Payload: json.RawMessage(`{"no_text": 1}`), IDYapeAccount: "acc"},
+		{ConversationID: "c", Sequence: 1, EventName: "UserMessageSent", Payload: json.RawMessage(`{"text": "hola"}`), IDYapeAccount: "acc"},
+		{ConversationID: "c", Sequence: 2, EventName: "AgentMessageSent", Payload: json.RawMessage(`{"text": "¿qué tal?", "truncated": true}`)},
+		{ConversationID: "c", Sequence: 3, EventName: "GuardrailResponseSent", Payload: json.RawMessage(`{"response_text": "no"}`)},
+		{ConversationID: "c", Sequence: 4, EventName: "ToolActionSummarized", Payload: json.RawMessage(`{}`)},
+		{ConversationID: "c", Sequence: 5, EventName: "UserMessageSent", Payload: json.RawMessage(`{"no_text": 1}`), IDYapeAccount: "acc"},
 	}
 
 	type projected struct {

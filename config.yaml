@@ -1,6 +1,5 @@
 server:
   port: ${SERVER_PORT:-3100}
-  environment: ${ENVIRONMENT:-development}
 
 # Same layout as ms-ml-genai-agents-bs, so a DSN or the discrete fields work alike.
 postgres:
@@ -22,9 +21,13 @@ postgres:
 # credentials stay in KAFKA_CLIENT_SASL_KEY and KAFKA_CLIENT_SASL_SECRET.
 kafka:
   brokers: ${KAFKA_CLIENT_BROKERS:-localhost:9092}
-  topic: ${KAFKA_TOPIC_OUTBOX:-yape.public.conversation_outbox}
+  topic: ${KAFKA_TOPIC_EVENTS:-yape.public.conversation_events}
   group_id: ${KAFKA_GROUP_ID:-ms-ml-conv-history-bs}
   auto_offset_reset: ${KAFKA_AUTO_OFFSET_RESET:-earliest}
+  # The longest the consumer may go without polling. A store outage is retried in place and
+  # blocks polling, so this is how long it rides one out before the broker reassigns its partitions.
+  max_poll_interval_ms: ${KAFKA_MAX_POLL_INTERVAL_MS:-300000}
+  session_timeout_ms: ${KAFKA_SESSION_TIMEOUT_MS:-45000}
 
 logging:
   level: ${LOG_LEVEL:-info}

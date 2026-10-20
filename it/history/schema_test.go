@@ -57,7 +57,6 @@ func TestSchema(t *testing.T) {
 			{
 				table: "conversation_inbox",
 				want: map[string]column{
-					"outbox_id":       {"bigint", false},
 					"conversation_id": {"character varying", false},
 					"sequence":        {"integer", false},
 					"event_name":      {"character varying", false},
@@ -80,7 +79,6 @@ func TestSchema(t *testing.T) {
 				want: map[string]column{
 					"conversation_id": {"character varying", false},
 					"sequence":        {"integer", false},
-					"outbox_id":       {"bigint", false},
 					"role":            {"text", false},
 					"author_id":       {"text", false},
 					"type":            {"text", false},
@@ -108,23 +106,18 @@ func TestSchema(t *testing.T) {
 		}{
 			{
 				name:  "inboxPrimaryKey",
-				query: `SELECT string_agg(a.attname, ',') FROM pg_index i JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY (i.indkey) WHERE i.indrelid = 'conversation_inbox'::regclass AND i.indisprimary`,
-				want:  "outbox_id",
+				query: `SELECT string_agg(a.attname, ',' ORDER BY a.attnum) FROM pg_index i JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY (i.indkey) WHERE i.indrelid = 'conversation_inbox'::regclass AND i.indisprimary`,
+				want:  "conversation_id,sequence",
 			},
 			{
-				name:  "inboxStreamIsUnique",
-				query: `SELECT string_agg(a.attname, ',' ORDER BY a.attnum) FROM pg_constraint c JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey) WHERE c.conname = 'conversation_inbox_stream_key' AND c.contype = 'u'`,
-				want:  "conversation_id,sequence",
+				name:  "inboxPrimaryKeyIsNamedAfterTheStream",
+				query: `SELECT conname FROM pg_constraint WHERE conrelid = 'conversation_inbox'::regclass AND contype = 'p'`,
+				want:  "conversation_inbox_stream_key",
 			},
 			{
 				name:  "messagesPrimaryKey",
 				query: `SELECT string_agg(a.attname, ',' ORDER BY a.attnum) FROM pg_index i JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY (i.indkey) WHERE i.indrelid = 'conversation_messages'::regclass AND i.indisprimary`,
 				want:  "conversation_id,sequence",
-			},
-			{
-				name:  "messagesOutboxIDIsUnique",
-				query: `SELECT string_agg(a.attname, ',') FROM pg_index i JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY (i.indkey) WHERE i.indrelid = 'conversation_messages'::regclass AND i.indisunique AND NOT i.indisprimary`,
-				want:  "outbox_id",
 			},
 			{
 				name:  "accountListIndex",
@@ -162,10 +155,10 @@ func TestSchema(t *testing.T) {
 	})
 
 	t.Run("checksAndDefaults", func(t *testing.T) {
-		const insertInbox = `INSERT INTO conversation_inbox (outbox_id, conversation_id, sequence, event_name, event_version, payload, metadata, actor, occurred_at, kafka_topic, kafka_partition, kafka_offset)
-			VALUES ($1::bigint, 'c', $1::int, 'E', 1, '{}', '{}', $2, now(), 't', 0, 0)`
-		const insertMessage = `INSERT INTO conversation_messages (conversation_id, sequence, outbox_id, role, author_id, text, source_event, received_at)
-			VALUES ('c', $1::int, $1::bigint, $2, 'a', 'hi', 'E', now())`
+		const insertInbox = `INSERT INTO conversation_inbox (conversation_id, sequence, event_name, event_version, payload, metadata, actor, occurred_at, kafka_topic, kafka_partition, kafka_offset)
+			VALUES ('c', $1::int, 'E', 1, '{}', '{}', $2, now(), 't', 0, 0)`
+		const insertMessage = `INSERT INTO conversation_messages (conversation_id, sequence, role, author_id, text, source_event, received_at)
+			VALUES ('c', $1::int, $2, 'a', 'hi', 'E', now())`
 
 		tests := []struct {
 			name    string
@@ -178,7 +171,7 @@ func TestSchema(t *testing.T) {
 			{name: "actorSystem", sql: insertInbox, args: []any{3, "system"}},
 			{name: "actorNullIsAllowed", sql: insertInbox, args: []any{4, nil}},
 			{name: "actorUnknownIsRejected", sql: insertInbox, args: []any{5, "robot"}, wantErr: "conversation_inbox_actor_check"},
-			{name: "repeatedOutboxIDIsRejected", sql: insertInbox, args: []any{1, "user"}, wantErr: "conversation_inbox_pkey"},
+			{name: "repeatedStreamPositionIsRejected", sql: insertInbox, args: []any{1, "user"}, wantErr: "conversation_inbox_stream_key"},
 			{name: "roleAppUser", sql: insertMessage, args: []any{1, "appUser"}},
 			{name: "roleAppMaker", sql: insertMessage, args: []any{2, "appMaker"}},
 			{name: "roleUnknownIsRejected", sql: insertMessage, args: []any{3, "bot"}, wantErr: "conversation_messages_role_check"},
@@ -206,7 +199,7 @@ func TestSchema(t *testing.T) {
 
 		var receivedSet bool
 		var projected *string
-		require.NoError(t, pool.QueryRow(ctx, `SELECT received_at IS NOT NULL, projected_at::text FROM conversation_inbox WHERE outbox_id = 1`).Scan(&receivedSet, &projected))
+		require.NoError(t, pool.QueryRow(ctx, `SELECT received_at IS NOT NULL, projected_at::text FROM conversation_inbox WHERE sequence = 1`).Scan(&receivedSet, &projected))
 		assert.True(t, receivedSet)
 		assert.Nil(t, projected)
 	})

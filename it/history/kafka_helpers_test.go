@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -67,13 +68,13 @@ func requireKafka(t *testing.T) stack {
 	return s
 }
 
-// requireDebezium skips the test unless the outbox connector runs and the agent's
-// database has the outbox.
+// requireDebezium skips the test unless the events connector runs and the agent's
+// database has the event store.
 func requireDebezium(t *testing.T, s stack) {
 	t.Helper()
 
 	client := http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(s.connectURL + "/connectors/conversation-outbox/status")
+	resp, err := client.Get(s.connectURL + "/connectors/conversation-events/status")
 	if err != nil {
 		skipOrFail(t, "Kafka Connect at %s does not answer: %v", s.connectURL, err)
 	}
@@ -85,7 +86,7 @@ func requireDebezium(t *testing.T, s stack) {
 	}
 	if resp.StatusCode != http.StatusOK || json.NewDecoder(resp.Body).Decode(&status) != nil ||
 		status.Connector.State != "RUNNING" || len(status.Tasks) == 0 || status.Tasks[0].State != "RUNNING" {
-		skipOrFail(t, "the conversation-outbox connector is not running (register it with local/debezium/register.sh)")
+		skipOrFail(t, "the conversation-events connector is not running (register it with local/debezium/register.sh)")
 	}
 
 	pool, err := pgxpool.New(context.Background(), s.agentDSN)
@@ -94,9 +95,9 @@ func requireDebezium(t *testing.T, s stack) {
 
 	var hasSequence bool
 	err = pool.QueryRow(context.Background(),
-		`SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'conversation_outbox' AND column_name = 'sequence')`).Scan(&hasSequence)
+		`SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'conversation_events' AND column_name = 'sequence')`).Scan(&hasSequence)
 	if err != nil || !hasSequence {
-		skipOrFail(t, "the agent database has no conversation_outbox with a sequence column")
+		skipOrFail(t, "the agent database has no conversation_events with a sequence column")
 	}
 }
 
@@ -167,19 +168,23 @@ func framed(schemaID byte, body []byte) []byte {
 	return append([]byte{0, 0, 0, 0, schemaID}, body...)
 }
 
-// outboxKey and outboxValue make the record Debezium would publish for a row.
-func outboxKey(id int64) []byte {
-	return framed(3, []byte(fmt.Sprintf(`{"id":%d}`, id)))
+// eventKey and eventValue make the record Debezium would publish for a
+// conversation_events row. The key is the conversation id, so a conversation stays
+// on one partition.
+func eventKey(conversationID string) []byte {
+	key, _ := json.Marshal(map[string]string{"conversation_id": conversationID})
+
+	return framed(3, key)
 }
 
-func outboxValue(id int64, conversationID string, sequence int, eventName string, payload map[string]any) []byte {
+func eventValue(conversationID string, sequence int, eventName string, payload map[string]any) []byte {
 	payloadJSON, _ := json.Marshal(payload)
 	metadataJSON, _ := json.Marshal(map[string]string{"actor": "user", "id_yape_account": "acc-pipeline"})
 	body, _ := json.Marshal(map[string]any{
-		"id": id, "conversation_id": conversationID, "sequence": sequence, "event_name": eventName, "event_version": 1,
+		"conversation_id": conversationID, "sequence": sequence, "event_name": eventName, "event_version": 1,
 		"payload": string(payloadJSON), "metadata": string(metadataJSON),
-		"correlation_id": "corr-pipeline", "id_yape_account": "acc-pipeline", "actor": "user", "published": false,
-		"created_at": time.Date(2026, 10, 20, 15, 0, sequence, 0, time.UTC).Format(time.RFC3339Nano),
+		"correlation_id": "corr-pipeline", "id_yape_account": "acc-pipeline", "actor": "user",
+		"occurred_at": time.Date(2026, 10, 20, 15, 0, sequence%60, 0, time.UTC).Format(time.RFC3339Nano),
 	})
 
 	return framed(4, body)
@@ -232,20 +237,21 @@ type consumerProcess struct {
 }
 
 // startConsumer runs the real binary against the topic and the history database.
-func startConsumer(t *testing.T, bin, brokers, topic, group, postgresDSN string) *consumerProcess {
+// extraEnv adds or overrides environment variables, for example a shorter poll interval.
+func startConsumer(t *testing.T, bin, brokers, topic, group, postgresDSN string, extraEnv ...string) *consumerProcess {
 	t.Helper()
 
 	// Registered first, so it runs after the process is stopped: a group can only
 	// be deleted once it has no members.
 	t.Cleanup(func() { deleteGroup(t, brokers, group) })
 
-	return startBinary(t, bin, []string{
+	return startBinary(t, bin, append([]string{
 		"POSTGRES_DSN=" + postgresDSN,
 		"KAFKA_CLIENT_BROKERS=" + brokers,
-		"KAFKA_TOPIC_OUTBOX=" + topic,
+		"KAFKA_TOPIC_EVENTS=" + topic,
 		"KAFKA_GROUP_ID=" + group,
 		"KAFKA_AUTO_OFFSET_RESET=earliest",
-	})
+	}, extraEnv...))
 }
 
 // deleteGroup removes a consumer group the test created. The broker refuses while
@@ -263,8 +269,13 @@ func deleteGroup(t *testing.T, brokers, group string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		res, err := admin.DeleteConsumerGroups(ctx, []string{group})
 		cancel()
-		if err == nil && len(res.ConsumerGroupResults) == 1 && res.ConsumerGroupResults[0].Error.Code() == ckafka.ErrNoError {
-			return
+		if err == nil && len(res.ConsumerGroupResults) == 1 {
+			// Gone already counts: a test that starts a consumer twice in one group
+			// registers this cleanup twice.
+			switch res.ConsumerGroupResults[0].Error.Code() {
+			case ckafka.ErrNoError, ckafka.ErrGroupIDNotFound:
+				return
+			}
 		}
 		last = err
 		if err == nil && len(res.ConsumerGroupResults) == 1 {
@@ -358,4 +369,30 @@ func assertCommittedEverything(t *testing.T, brokers, topic, group string) {
 // uniqueName returns a name that no other run uses.
 func uniqueName(prefix string) string {
 	return prefix + "-" + uuid.NewString()[:8]
+}
+
+// waitForLog blocks until the process output holds substr at least n times.
+func (p *consumerProcess) waitForLog(t *testing.T, substr string, n int, timeout time.Duration) {
+	t.Helper()
+
+	eventually(t, timeout, fmt.Sprintf("%d x %q in the consumer log", n, substr), func() bool {
+		return strings.Count(p.out.String(), substr) >= n
+	})
+}
+
+// committedOffsets returns, for the first partition of the topic, the offset the
+// group committed and the end of the partition.
+func committedOffsets(t *testing.T, brokers, topic, group string, partition int32) (committed, end int64) {
+	t.Helper()
+
+	c, err := ckafka.NewConsumer(&ckafka.ConfigMap{"bootstrap.servers": brokers, "group.id": group, "enable.auto.commit": false})
+	require.NoError(t, err)
+	defer c.Close()
+
+	got, err := c.Committed([]ckafka.TopicPartition{{Topic: &topic, Partition: partition}}, 10000)
+	require.NoError(t, err)
+	_, high, err := c.QueryWatermarkOffsets(topic, partition, 10000)
+	require.NoError(t, err)
+
+	return int64(got[0].Offset), high
 }

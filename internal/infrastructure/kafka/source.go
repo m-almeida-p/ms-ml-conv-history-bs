@@ -36,8 +36,10 @@ type engineFactory func(brokers, clientID, groupID string, conf *core.ClientConf
 // dead-letter engine this service does not have.
 //
 // The library's loop stops on SIGINT or SIGTERM, which it listens for itself, or
-// on a fatal broker error. It does not watch ctx, and it only logs an error that
-// the callback returns.
+// on a fatal broker error, and in both cases Consume returns nil. It does not
+// watch ctx, and it only logs an error that the callback returns and polls on, so
+// the consumer tells a fatal stop from a clean one by its own context (see
+// Consumer.Run) and stops handling records once that context is cancelled.
 type Source struct {
 	sub    subscriber
 	topics []string
@@ -76,8 +78,10 @@ func newSource(cfg config.KafkaConfig, factory engineFactory) (*Source, error) {
 func clientConfiguration(cfg config.KafkaConfig) *core.ClientConfiguration {
 	conf := core.ClientConfiguration{
 		// The service commits an offset only after the event is stored.
-		"enable.auto.commit": false,
-		"auto.offset.reset":  cfg.AutoOffsetReset,
+		"enable.auto.commit":   false,
+		"auto.offset.reset":    cfg.AutoOffsetReset,
+		"max.poll.interval.ms": cfg.MaxPollIntervalMs,
+		"session.timeout.ms":   cfg.SessionTimeoutMs,
 	}
 
 	key, secret := os.Getenv(core.BrokerSaslKeyEnv), os.Getenv(core.BrokerSaslSecretEnv)

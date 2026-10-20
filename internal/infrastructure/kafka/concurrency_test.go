@@ -17,7 +17,7 @@ import (
 // Decode keeps no state: the same records decoded at once give what they give one
 // at a time. Run with -race.
 func TestDecodeGivesTheSameWhenRecordsAreDecodedAtOnce(t *testing.T) {
-	values := []string{validBody, "", "{broken", rangeRecord("0", "1", "1", "c", "E"), "\x00\x00\x00\x00\x09" + validBody}
+	values := []string{validBody, "", "{broken", rangeRecord("0", "1", "c", "E"), "\x00\x00\x00\x00\x09" + validBody}
 
 	type decoded struct {
 		Event *domain.InboxEvent
@@ -58,7 +58,10 @@ func TestConsumerCountersCanBeReadWhileItConsumes(t *testing.T) {
 		// Task 0 consumes; the others read the counters while it does.
 		seen := concurrent.Collect(exec, 1+readers, func(i int) []int64 {
 			if i == 0 {
-				require.NoError(t, consumer.Run(context.Background()))
+				ctx, stop := context.WithCancel(context.Background())
+				defer stop()
+				src.onDone = stop // the shutdown signal arrives after the last record
+				require.NoError(t, consumer.Run(ctx))
 
 				return nil
 			}

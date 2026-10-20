@@ -12,7 +12,7 @@
 # totals and exits with its last offset committed. The build happens before that stop,
 # so a broken build leaves the running consumer untouched.
 # The group, topic and offset reset come from config.yaml and .env (KAFKA_GROUP_ID,
-# KAFKA_TOPIC_OUTBOX, KAFKA_AUTO_OFFSET_RESET), or from the environment of this shell.
+# KAFKA_TOPIC_EVENTS, KAFKA_AUTO_OFFSET_RESET), or from the environment of this shell.
 # Usage: ./scripts/run_consumer.sh [--rebuild] [--foreground] [--no-kill] [--replay]
 #   --rebuild      Force delete the existing binary and rebuild before starting
 #   --foreground   Run the consumer attached to this shell instead of in the background

@@ -57,8 +57,8 @@ func TestAPI(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := pool.Exec(ctx, `
-		INSERT INTO conversation_messages (conversation_id, sequence, outbox_id, role, author_id, text, source_event, id_yape_account, received_at)
-		SELECT 'conv_big', s, 1000 + s, CASE WHEN s % 2 = 1 THEN 'appUser' ELSE 'appMaker' END,
+		INSERT INTO conversation_messages (conversation_id, sequence, role, author_id, text, source_event, id_yape_account, received_at)
+		SELECT 'conv_big', s, CASE WHEN s % 2 = 1 THEN 'appUser' ELSE 'appMaker' END,
 		       CASE WHEN s % 2 = 1 THEN 'acc-api' ELSE 'ms-ml-genai-agent-bs' END, 'message ' || s, 'UserMessageSent', 'acc-api',
 		       '2026-10-20T10:00:00Z'::timestamptz + s * interval '1 second'
 		FROM generate_series(1, 230) s`)
@@ -121,13 +121,13 @@ func TestAPI(t *testing.T) {
 	})
 
 	t.Run("messagesCarryTheSmoochFields", func(t *testing.T) {
-		status, body := get("/v1/conversations/conv_big/messages?page[after]=1228")
+		status, body := get("/v1/conversations/conv_big/messages?page[after]=228")
 
 		require.Equal(t, http.StatusOK, status)
 		var page apiMessages
 		require.NoError(t, json.Unmarshal(body, &page))
 		require.Len(t, page.Messages, 2)
-		assert.Equal(t, "1229", page.Messages[0].ID)
+		assert.Equal(t, "229", page.Messages[0].ID)
 		assert.Equal(t, "appUser", page.Messages[0].Role)
 		assert.Equal(t, "acc-api", page.Messages[0].AuthorID)
 		assert.Equal(t, "appMaker", page.Messages[1].Role)
@@ -161,16 +161,16 @@ func TestAPI(t *testing.T) {
 			wantStatus int
 			wantCode   string
 		}{
-			{name: "bothCursors", path: "/v1/conversations/conv_big/messages?page[before]=1100&page[after]=1100", wantStatus: 400, wantCode: "invalid_request"},
+			{name: "bothCursors", path: "/v1/conversations/conv_big/messages?page[before]=100&page[after]=100", wantStatus: 400, wantCode: "invalid_request"},
 			{name: "cursorNotANumber", path: "/v1/conversations/conv_big/messages?page[before]=abc", wantStatus: 400, wantCode: "invalid_cursor"},
 			{name: "cursorOfNoMessage", path: "/v1/conversations/conv_big/messages?page[after]=99999", wantStatus: 400, wantCode: "invalid_cursor"},
 			{name: "unknownConversation", path: "/v1/conversations/conv_nope/messages", wantStatus: 404, wantCode: "not_found"},
 			{name: "malformedConversationID", path: "/v1/conversations/bad%20id/messages", wantStatus: 400, wantCode: "invalid_request"},
 			{name: "missingAccount", path: "/v1/conversations", wantStatus: 400, wantCode: "invalid_request"},
 			{name: "emptyCursor", path: "/v1/conversations/conv_big/messages?page[before]=", wantStatus: 400, wantCode: "invalid_cursor"},
-			{name: "emptyCursorBesideARealOne", path: "/v1/conversations/conv_big/messages?page[before]=&page[after]=1100", wantStatus: 400, wantCode: "invalid_request"},
-			{name: "repeatedCursor", path: "/v1/conversations/conv_big/messages?page[before]=1100&page[before]=1101", wantStatus: 400, wantCode: "invalid_request"},
-			{name: "cursorWithASign", path: "/v1/conversations/conv_big/messages?page[after]=%2B1100", wantStatus: 400, wantCode: "invalid_cursor"},
+			{name: "emptyCursorBesideARealOne", path: "/v1/conversations/conv_big/messages?page[before]=&page[after]=100", wantStatus: 400, wantCode: "invalid_request"},
+			{name: "repeatedCursor", path: "/v1/conversations/conv_big/messages?page[before]=100&page[before]=101", wantStatus: 400, wantCode: "invalid_request"},
+			{name: "cursorWithASign", path: "/v1/conversations/conv_big/messages?page[after]=%2B100", wantStatus: 400, wantCode: "invalid_cursor"},
 			{name: "unknownRoute", path: "/v1/other", wantStatus: 404, wantCode: "not_found"},
 		}
 
@@ -203,8 +203,8 @@ func TestAPI(t *testing.T) {
 			strings.Repeat("x", 900_000), // close to Kafka's default 1 MB record limit
 		}
 		for i, text := range texts {
-			_, err := pool.Exec(ctx, `INSERT INTO conversation_messages (conversation_id, sequence, outbox_id, role, author_id, text, source_event, id_yape_account, received_at)
-				VALUES ('conv_text', $1, $2, 'appUser', 'a', $3, 'UserMessageSent', 'acc-text', now())`, i+1, 5000+i+1, text)
+			_, err := pool.Exec(ctx, `INSERT INTO conversation_messages (conversation_id, sequence, role, author_id, text, source_event, id_yape_account, received_at)
+				VALUES ('conv_text', $1, 'appUser', 'a', $2, 'UserMessageSent', 'acc-text', now())`, i+1, text)
 			require.NoError(t, err)
 		}
 

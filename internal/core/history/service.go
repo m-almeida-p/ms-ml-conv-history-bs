@@ -6,7 +6,6 @@ package history
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"strconv"
 
 	"github.com/yaperos/ms-ml-conv-history-bs/internal/core/domain"
@@ -15,10 +14,6 @@ import (
 )
 
 var _ service.History = (*Service)(nil)
-
-// identifier is what a conversation id or an account id may look like. It keeps
-// out anything that could not be one, without tying the service to a format.
-var identifier = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
 
 // Service implements service.History over a message repository.
 type Service struct {
@@ -32,7 +27,7 @@ func NewService(messages repository.MessageRepository) *Service {
 
 // Messages implements service.History.
 func (s *Service) Messages(ctx context.Context, req service.MessagesRequest) (domain.MessagePage, error) {
-	if !identifier.MatchString(req.ConversationID) {
+	if !domain.ValidIdentifier(req.ConversationID) {
 		return domain.MessagePage{}, fmt.Errorf("%w: the conversation id is malformed", domain.ErrInvalidRequest)
 	}
 
@@ -47,14 +42,14 @@ func (s *Service) Messages(ctx context.Context, req service.MessagesRequest) (do
 		if err != nil {
 			return domain.MessagePage{}, err
 		}
-		query.CursorID = id
+		query.CursorSequence = id
 	case req.After != nil:
 		query.Direction = domain.DirectionAfter
 		id, err := parseCursor(*req.After)
 		if err != nil {
 			return domain.MessagePage{}, err
 		}
-		query.CursorID = id
+		query.CursorSequence = id
 	}
 
 	page, err := s.messages.ListMessages(ctx, query)
@@ -69,8 +64,8 @@ func (s *Service) Messages(ctx context.Context, req service.MessagesRequest) (do
 		HasMore:        page.HasMore,
 	}
 	if n := len(page.Messages); n > 0 {
-		result.BeforeCursor = strconv.FormatInt(page.Messages[0].OutboxID, 10)
-		result.AfterCursor = strconv.FormatInt(page.Messages[n-1].OutboxID, 10)
+		result.BeforeCursor = strconv.Itoa(page.Messages[0].Sequence)
+		result.AfterCursor = strconv.Itoa(page.Messages[n-1].Sequence)
 	}
 
 	return result, nil
@@ -78,20 +73,21 @@ func (s *Service) Messages(ctx context.Context, req service.MessagesRequest) (do
 
 // Conversations implements service.History.
 func (s *Service) Conversations(ctx context.Context, idYapeAccount string) (domain.ConversationList, error) {
-	if !identifier.MatchString(idYapeAccount) {
+	if !domain.ValidIdentifier(idYapeAccount) {
 		return domain.ConversationList{}, fmt.Errorf("%w: idYapeAccount is missing or malformed", domain.ErrInvalidRequest)
 	}
 
 	return s.messages.ListConversations(ctx, idYapeAccount)
 }
 
-// parseCursor reads a message _id. Only the plain decimal form that the service
-// itself hands out is accepted, so "+5" or "05" are not cursors.
-func parseCursor(cursor string) (int64, error) {
-	id, err := strconv.ParseInt(cursor, 10, 64)
+// parseCursor reads a message _id, which is the sequence of its event. Only the
+// plain decimal form that the service itself hands out is accepted, so "+5" or
+// "05" are not cursors.
+func parseCursor(cursor string) (int, error) {
+	id, err := strconv.ParseInt(cursor, 10, 32)
 	if err != nil || id < 1 || strconv.FormatInt(id, 10) != cursor {
 		return 0, fmt.Errorf("%w: the cursor is not a message _id", domain.ErrInvalidCursor)
 	}
 
-	return id, nil
+	return int(id), nil
 }

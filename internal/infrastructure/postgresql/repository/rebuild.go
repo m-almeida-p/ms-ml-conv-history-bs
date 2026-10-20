@@ -16,12 +16,12 @@ import (
 func (r *Inbox) Rebuild(ctx context.Context, project func(domain.InboxEvent) (*domain.Message, error)) (domain.RebuildResult, error) {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
-		return domain.RebuildResult{}, fmt.Errorf("begin transaction: %w", err)
+		return domain.RebuildResult{}, dbError("begin transaction", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	if _, err := tx.Exec(ctx, sqlDeleteMessages); err != nil {
-		return domain.RebuildResult{}, fmt.Errorf("empty messages: %w", err)
+		return domain.RebuildResult{}, dbError("empty messages", err)
 	}
 
 	var (
@@ -39,7 +39,7 @@ func (r *Inbox) Rebuild(ctx context.Context, project func(domain.InboxEvent) (*d
 		for _, event := range batch {
 			// A cancelled context stops the replay at the next event.
 			if err := ctx.Err(); err != nil {
-				return domain.RebuildResult{}, fmt.Errorf("replay stopped at event %d: %w", event.OutboxID, err)
+				return domain.RebuildResult{}, fmt.Errorf("replay stopped at event %s: %w", event.Ref(), err)
 			}
 
 			result.Events++
@@ -50,13 +50,13 @@ func (r *Inbox) Rebuild(ctx context.Context, project func(domain.InboxEvent) (*d
 				result.Invalid++
 				continue
 			case err != nil:
-				return domain.RebuildResult{}, fmt.Errorf("project event %d: %w", event.OutboxID, err)
+				return domain.RebuildResult{}, fmt.Errorf("project event %s: %w", event.Ref(), err)
 			case message == nil:
 				continue
 			}
 
 			if err := upsertMessage(ctx, tx, *message); err != nil {
-				return domain.RebuildResult{}, fmt.Errorf("upsert message of event %d: %w", event.OutboxID, err)
+				return domain.RebuildResult{}, dbError(fmt.Sprintf("upsert message of event %s", event.Ref()), err)
 			}
 			result.Messages++
 		}
@@ -69,7 +69,7 @@ func (r *Inbox) Rebuild(ctx context.Context, project func(domain.InboxEvent) (*d
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return domain.RebuildResult{}, fmt.Errorf("commit rebuild: %w", err)
+		return domain.RebuildResult{}, dbError("commit rebuild", err)
 	}
 
 	return result, nil
@@ -81,7 +81,7 @@ func (r *Inbox) Rebuild(ctx context.Context, project func(domain.InboxEvent) (*d
 func (r *Inbox) readBatch(ctx context.Context, tx pgx.Tx, conversationID string, sequence int) ([]domain.InboxEvent, error) {
 	rows, err := tx.Query(ctx, sqlSelectInboxBatch, conversationID, sequence, r.batchSize)
 	if err != nil {
-		return nil, fmt.Errorf("read inbox batch: %w", err)
+		return nil, dbError("read inbox batch", err)
 	}
 	defer rows.Close()
 
@@ -91,16 +91,16 @@ func (r *Inbox) readBatch(ctx context.Context, tx pgx.Tx, conversationID string,
 			e                                domain.InboxEvent
 			correlationID, account, actorRaw *string
 		)
-		if err := rows.Scan(&e.OutboxID, &e.ConversationID, &e.Sequence, &e.EventName, &e.EventVersion,
+		if err := rows.Scan(&e.ConversationID, &e.Sequence, &e.EventName, &e.EventVersion,
 			&e.Payload, &e.Metadata, &correlationID, &account, &actorRaw, &e.OccurredAt,
 			&e.KafkaTopic, &e.KafkaPartition, &e.KafkaOffset); err != nil {
-			return nil, fmt.Errorf("scan inbox event: %w", err)
+			return nil, dbError("scan inbox event", err)
 		}
 		e.CorrelationID, e.IDYapeAccount, e.Actor = value(correlationID), value(account), value(actorRaw)
 		events = append(events, e)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read inbox batch: %w", err)
+		return nil, dbError("read inbox batch", err)
 	}
 
 	return events, nil

@@ -56,7 +56,7 @@ func (f *fakeEngine) Seek([]core.TopicPartitionInfo) ([]core.TopicPartitionInfo,
 }
 
 func kafkaConfig() config.KafkaConfig {
-	return config.KafkaConfig{Brokers: "kafka:29092", Topic: topic, GroupID: "history", AutoOffsetReset: "earliest"}
+	return config.KafkaConfig{Brokers: "kafka:29092", Topic: topic, GroupID: "history", AutoOffsetReset: "earliest", MaxPollIntervalMs: 300000, SessionTimeoutMs: 45000}
 }
 
 func TestClientConfiguration(t *testing.T) {
@@ -70,25 +70,25 @@ func TestClientConfiguration(t *testing.T) {
 		{
 			name: "noAutoCommitAndTheConfiguredOffsetReset",
 			cfg:  kafkaConfig(),
-			want: core.ClientConfiguration{"enable.auto.commit": false, "auto.offset.reset": "earliest"},
+			want: core.ClientConfiguration{"enable.auto.commit": false, "auto.offset.reset": "earliest", "max.poll.interval.ms": 300000, "session.timeout.ms": 45000},
 		},
 		{
 			name: "latestOffsetReset",
-			cfg:  config.KafkaConfig{AutoOffsetReset: "latest"},
-			want: core.ClientConfiguration{"enable.auto.commit": false, "auto.offset.reset": "latest"},
+			cfg:  config.KafkaConfig{AutoOffsetReset: "latest", MaxPollIntervalMs: 20000, SessionTimeoutMs: 6000},
+			want: core.ClientConfiguration{"enable.auto.commit": false, "auto.offset.reset": "latest", "max.poll.interval.ms": 20000, "session.timeout.ms": 6000},
 		},
 		{
 			name: "credentialsTurnOnSASLOverTLS",
 			cfg:  kafkaConfig(), key: "k", secret: "s",
 			want: core.ClientConfiguration{
-				"enable.auto.commit": false, "auto.offset.reset": "earliest",
+				"enable.auto.commit": false, "auto.offset.reset": "earliest", "max.poll.interval.ms": 300000, "session.timeout.ms": 45000,
 				"security.protocol": "SASL_SSL", "sasl.mechanisms": "PLAIN", "sasl.username": "k", "sasl.password": "s",
 			},
 		},
 		{
 			name: "aKeyWithoutASecretIsIgnored",
 			cfg:  kafkaConfig(), key: "k",
-			want: core.ClientConfiguration{"enable.auto.commit": false, "auto.offset.reset": "earliest"},
+			want: core.ClientConfiguration{"enable.auto.commit": false, "auto.offset.reset": "earliest", "max.poll.interval.ms": 300000, "session.timeout.ms": 45000},
 		},
 	}
 

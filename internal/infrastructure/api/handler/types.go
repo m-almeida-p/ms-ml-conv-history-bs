@@ -21,7 +21,7 @@ type conversationRef struct {
 // messageResponse is a Smooch-shaped message. Fields the history does not hold
 // (name, avatarUrl, actions, items, mediaUrl, quotedMessage, subroles) are left out.
 type messageResponse struct {
-	// ID is the message id and the paging cursor: the outbox id of its event, as a string.
+	// ID is the message id and the paging cursor: the sequence of its event in the conversation, as a string. It is unique within the conversation.
 	ID string `json:"_id" example:"1042"`
 	// Type is the message type. Always text for now.
 	Type string `json:"type" example:"text"`

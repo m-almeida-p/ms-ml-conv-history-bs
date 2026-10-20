@@ -1,4 +1,4 @@
-// Command consumer reads the conversation outbox topic and builds the chat history.
+// Command consumer reads the conversation events topic and builds the chat history.
 //
 //	consumer          read the topic until SIGINT or SIGTERM
 //	consumer rebuild  recreate the chat messages from the inbox, then exit
@@ -76,6 +76,10 @@ func run(args []string, log *logging.Logger) error {
 		log.Infof("rebuilt the chat messages: events=%d messages=%d invalid=%d", result.Events, result.Messages, result.Invalid)
 
 		return nil
+	}
+
+	for _, warning := range cfg.Kafka.Warnings() {
+		log.Warnf("%s", warning)
 	}
 
 	source, err := kafka.NewSource(cfg.Kafka)

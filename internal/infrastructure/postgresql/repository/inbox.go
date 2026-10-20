@@ -24,8 +24,8 @@ var (
 	sqlDeleteMessages string
 	//go:embed SQL/select_inbox_batch.sql
 	sqlSelectInboxBatch string
-	//go:embed SQL/select_inbox_position.sql
-	sqlSelectInboxPosition string
+	//go:embed SQL/select_inbox_same.sql
+	sqlSelectInboxSame string
 )
 
 // defaultBatchSize is how many inbox rows a rebuild reads at a time, so memory
@@ -61,48 +61,40 @@ func NewInbox(db postgresql.DB, opts ...Option) *Inbox {
 	return inbox
 }
 
-// Apply implements repository.InboxRepository. The dedupe is the primary key:
-// ON CONFLICT DO NOTHING plus RowsAffected tells a new event from a repeat.
+// Apply implements repository.InboxRepository. The dedupe is the stream key:
+// ON CONFLICT DO NOTHING plus RowsAffected tells a new event from a repeat, and
+// settles two writers racing on the same event without raising an error.
 func (r *Inbox) Apply(ctx context.Context, event domain.InboxEvent, message *domain.Message) (domain.ApplyResult, error) {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
-		return domain.ApplyResult{}, fmt.Errorf("begin transaction: %w", err)
+		return domain.ApplyResult{}, dbError("begin transaction", err)
 	}
 	// A rollback after a commit returns an error that means nothing here.
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	tag, err := tx.Exec(ctx, sqlInsertInbox,
-		event.OutboxID, event.ConversationID, event.Sequence, event.EventName, event.EventVersion,
+		event.ConversationID, event.Sequence, event.EventName, event.EventVersion,
 		event.Payload, event.Metadata,
 		nullable(event.CorrelationID), nullable(event.IDYapeAccount), nullable(event.Actor), event.OccurredAt,
 		event.KafkaTopic, event.KafkaPartition, event.KafkaOffset)
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			// The aborted transaction holds nothing; look from outside it.
-			_ = tx.Rollback(ctx)
-			if handled, checkErr := r.racedRepeat(ctx, event); handled {
-				return domain.ApplyResult{}, checkErr
-			}
-		}
-
-		return domain.ApplyResult{}, writeError(fmt.Sprintf("insert inbox event %d", event.OutboxID), err)
+		return domain.ApplyResult{}, writeError(fmt.Sprintf("insert inbox event %s", event.Ref()), err)
 	}
 	if tag.RowsAffected() == 0 {
-		// Seen before. The key is the outbox id alone, so a different event that
-		// reuses an id (the agent's outbox recreated, its ids restarting) would pass
-		// for a repeat and be lost without a trace. Compare the position it holds.
+		// Seen before. The key is the stream position alone, so a different event at
+		// a position already taken (events deleted from the tail of a stream and
+		// written again) would pass for a repeat and be lost without a trace.
 		return domain.ApplyResult{}, sameEvent(ctx, tx, event)
 	}
 
 	if message != nil {
 		if err := upsertMessage(ctx, tx, *message); err != nil {
-			return domain.ApplyResult{}, writeError(fmt.Sprintf("upsert message of event %d", event.OutboxID), err)
+			return domain.ApplyResult{}, writeError(fmt.Sprintf("upsert message of event %s", event.Ref()), err)
 		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return domain.ApplyResult{}, fmt.Errorf("commit event %d: %w", event.OutboxID, err)
+		return domain.ApplyResult{}, dbError(fmt.Sprintf("commit event %s", event.Ref()), err)
 	}
 
 	return domain.ApplyResult{Applied: true, Projected: message != nil}, nil
@@ -113,58 +105,30 @@ type rowQuerier interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
-// storedPosition reads the position of the inbox row that holds outboxID. found is
-// false when there is none.
-func storedPosition(ctx context.Context, q rowQuerier, outboxID int64) (conversationID string, sequence int, found bool, err error) {
-	err = q.QueryRow(ctx, sqlSelectInboxPosition, outboxID).Scan(&conversationID, &sequence)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return "", 0, false, nil
-	}
-	if err != nil {
-		return "", 0, false, fmt.Errorf("check event %d: %w", outboxID, err)
-	}
-
-	return conversationID, sequence, true, nil
-}
-
-// sameEvent confirms that the inbox row holding event's outbox id is this event.
-// It returns nil for a genuine repeat and domain.ErrRejected when another event
-// holds the id.
+// sameEvent confirms that the inbox row at event's position holds this event. It
+// returns nil for a genuine repeat and domain.ErrRejected when the position holds
+// another event. Name, version, payload, metadata, correlation id, account and actor
+// are compared (an absent value equals only an absent one); JSON by value, so the
+// order of keys does not matter. The time is left out on purpose: its precision
+// differs between the database and the record.
 func sameEvent(ctx context.Context, q rowQuerier, event domain.InboxEvent) error {
-	conversationID, sequence, found, err := storedPosition(ctx, q, event.OutboxID)
-	if err != nil {
-		return err
-	}
-	if !found {
+	var same bool
+	err := q.QueryRow(ctx, sqlSelectInboxSame,
+		event.ConversationID, event.Sequence, event.EventName, event.EventVersion, event.Payload, event.Metadata,
+		nullable(event.CorrelationID), nullable(event.IDYapeAccount), nullable(event.Actor)).Scan(&same)
+	if errors.Is(err, pgx.ErrNoRows) {
 		// The row was there a moment ago (ON CONFLICT said so) and is gone: not a
 		// repeat we can vouch for, and worth another attempt.
-		return fmt.Errorf("check repeated event %d: the row it conflicted with is gone", event.OutboxID)
+		return fmt.Errorf("check repeated event %s: the row it conflicted with is gone", event.Ref())
 	}
-	if conversationID != event.ConversationID || sequence != event.Sequence {
-		return fmt.Errorf("event %d: %w: its outbox id already belongs to another event", event.OutboxID, domain.ErrRejected)
+	if err != nil {
+		return dbError(fmt.Sprintf("check repeated event %s", event.Ref()), err)
+	}
+	if !same {
+		return fmt.Errorf("event %s: %w: its stream position already holds another event", event.Ref(), domain.ErrRejected)
 	}
 
 	return nil
-}
-
-// racedRepeat decides what a unique violation on the inbox insert means. Two
-// writers storing the same event at the same moment can make Postgres report a
-// violation of the stream key before ON CONFLICT (outbox_id) settles the race. The
-// other writer's row is committed by the time the error comes back, so if the row
-// holding this outbox id is this very event, it is a repeat. handled is false when
-// it is not, and the caller reports the violation as it is.
-func (r *Inbox) racedRepeat(ctx context.Context, event domain.InboxEvent) (handled bool, err error) {
-	conversationID, sequence, found, err := storedPosition(ctx, r.db, event.OutboxID)
-	switch {
-	case err != nil:
-		return true, err
-	case !found:
-		return false, nil // a genuine clash with a different outbox id
-	case conversationID != event.ConversationID || sequence != event.Sequence:
-		return true, fmt.Errorf("event %d: %w: its outbox id already belongs to another event", event.OutboxID, domain.ErrRejected)
-	}
-
-	return true, nil
 }
 
 // writeError wraps a failed write. Two kinds of error can never succeed on a
@@ -184,13 +148,13 @@ func writeError(what string, err error) error {
 		}
 	}
 
-	return fmt.Errorf("%s: %w", what, err)
+	return dbError(what, err)
 }
 
 // upsertMessage writes one chat message inside tx.
 func upsertMessage(ctx context.Context, tx pgx.Tx, message domain.Message) error {
 	_, err := tx.Exec(ctx, sqlUpsertMessage,
-		message.ConversationID, message.Sequence, message.OutboxID, string(message.Role), message.AuthorID,
+		message.ConversationID, message.Sequence, string(message.Role), message.AuthorID,
 		message.Type, message.Text, message.Truncated, message.SourceEvent,
 		nullable(message.IDYapeAccount), message.ReceivedAt)
 

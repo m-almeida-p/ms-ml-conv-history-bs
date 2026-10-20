@@ -36,20 +36,20 @@ func TestRead(t *testing.T) {
 	ctx := context.Background()
 	repo := repository.NewMessages(pool)
 
-	// "big" holds 250 messages whose outbox id is 1000 + sequence; "exact" holds
+	// "big" holds 250 messages, sequences 1 to 250; "exact" holds
 	// exactly one page; "small" and "other" belong to other accounts.
 	_, err := pool.Exec(ctx, `
-		INSERT INTO conversation_messages (conversation_id, sequence, outbox_id, role, author_id, text, source_event, id_yape_account, received_at)
-		SELECT 'big', s, 1000 + s, CASE WHEN s % 2 = 1 THEN 'appUser' ELSE 'appMaker' END, 'a', 'm' || s, 'UserMessageSent', 'acc-1', '2026-10-20T10:00:00Z'::timestamptz + s * interval '1 second'
+		INSERT INTO conversation_messages (conversation_id, sequence, role, author_id, text, source_event, id_yape_account, received_at)
+		SELECT 'big', s, CASE WHEN s % 2 = 1 THEN 'appUser' ELSE 'appMaker' END, 'a', 'm' || s, 'UserMessageSent', 'acc-1', '2026-10-20T10:00:00Z'::timestamptz + s * interval '1 second'
 		FROM generate_series(1, 250) s;
-		INSERT INTO conversation_messages (conversation_id, sequence, outbox_id, role, author_id, text, source_event, id_yape_account, received_at)
-		SELECT 'exact', s, 5000 + s, 'appUser', 'a', 'm' || s, 'UserMessageSent', 'acc-1', '2026-10-20T12:00:00Z'::timestamptz + s * interval '1 second'
+		INSERT INTO conversation_messages (conversation_id, sequence, role, author_id, text, source_event, id_yape_account, received_at)
+		SELECT 'exact', s, 'appUser', 'a', 'm' || s, 'UserMessageSent', 'acc-1', '2026-10-20T12:00:00Z'::timestamptz + s * interval '1 second'
 		FROM generate_series(1, 100) s;
-		INSERT INTO conversation_messages (conversation_id, sequence, outbox_id, role, author_id, text, source_event, id_yape_account, received_at)
-		VALUES ('small', 2, 9001, 'appUser', 'a', 'hola', 'UserMessageSent', 'acc-1', '2026-10-20T11:00:00Z'),
-		       ('small', 5, 9002, 'appMaker', 'a', 'chau', 'AgentMessageSent', 'acc-1', '2026-10-20T11:05:00Z'),
-		       ('other', 1, 9100, 'appUser', 'a', 'x', 'UserMessageSent', 'acc-2', '2026-10-20T13:00:00Z'),
-		       ('noaccount', 1, 9200, 'appMaker', 'a', 'y', 'GuardrailResponseSent', NULL, '2026-10-20T13:30:00Z')`)
+		INSERT INTO conversation_messages (conversation_id, sequence, role, author_id, text, source_event, id_yape_account, received_at)
+		VALUES ('small', 2, 'appUser', 'a', 'hola', 'UserMessageSent', 'acc-1', '2026-10-20T11:00:00Z'),
+		       ('small', 5, 'appMaker', 'a', 'chau', 'AgentMessageSent', 'acc-1', '2026-10-20T11:05:00Z'),
+		       ('other', 1, 'appUser', 'a', 'x', 'UserMessageSent', 'acc-2', '2026-10-20T13:00:00Z'),
+		       ('noaccount', 1, 'appMaker', 'a', 'y', 'GuardrailResponseSent', NULL, '2026-10-20T13:30:00Z')`)
 	require.NoError(t, err)
 
 	t.Run("pages", func(t *testing.T) {
@@ -61,20 +61,20 @@ func TestRead(t *testing.T) {
 			wantErr     error
 		}{
 			{name: "newestPage", query: domain.PageQuery{ConversationID: "big", Direction: domain.DirectionNewest}, wantSeqs: sequenceRange(151, 250), wantHasMore: true},
-			{name: "beforeTheOldestOfTheNewestPage", query: domain.PageQuery{ConversationID: "big", Direction: domain.DirectionBefore, CursorID: 1151}, wantSeqs: sequenceRange(51, 150), wantHasMore: true},
-			{name: "beforeLeavesTheFirstFifty", query: domain.PageQuery{ConversationID: "big", Direction: domain.DirectionBefore, CursorID: 1051}, wantSeqs: sequenceRange(1, 50)},
-			{name: "beforeTheVeryFirstMessageIsEmpty", query: domain.PageQuery{ConversationID: "big", Direction: domain.DirectionBefore, CursorID: 1001}, wantSeqs: []int{}},
-			{name: "afterTheFirstHundred", query: domain.PageQuery{ConversationID: "big", Direction: domain.DirectionAfter, CursorID: 1100}, wantSeqs: sequenceRange(101, 200), wantHasMore: true},
-			{name: "afterLeavesTheLastFifty", query: domain.PageQuery{ConversationID: "big", Direction: domain.DirectionAfter, CursorID: 1200}, wantSeqs: sequenceRange(201, 250)},
-			{name: "afterTheLastMessageIsEmpty", query: domain.PageQuery{ConversationID: "big", Direction: domain.DirectionAfter, CursorID: 1250}, wantSeqs: []int{}},
+			{name: "beforeTheOldestOfTheNewestPage", query: domain.PageQuery{ConversationID: "big", Direction: domain.DirectionBefore, CursorSequence: 151}, wantSeqs: sequenceRange(51, 150), wantHasMore: true},
+			{name: "beforeLeavesTheFirstFifty", query: domain.PageQuery{ConversationID: "big", Direction: domain.DirectionBefore, CursorSequence: 51}, wantSeqs: sequenceRange(1, 50)},
+			{name: "beforeTheVeryFirstMessageIsEmpty", query: domain.PageQuery{ConversationID: "big", Direction: domain.DirectionBefore, CursorSequence: 1}, wantSeqs: []int{}},
+			{name: "afterTheFirstHundred", query: domain.PageQuery{ConversationID: "big", Direction: domain.DirectionAfter, CursorSequence: 100}, wantSeqs: sequenceRange(101, 200), wantHasMore: true},
+			{name: "afterLeavesTheLastFifty", query: domain.PageQuery{ConversationID: "big", Direction: domain.DirectionAfter, CursorSequence: 200}, wantSeqs: sequenceRange(201, 250)},
+			{name: "afterTheLastMessageIsEmpty", query: domain.PageQuery{ConversationID: "big", Direction: domain.DirectionAfter, CursorSequence: 250}, wantSeqs: []int{}},
 			{name: "aConversationOfExactlyOnePage", query: domain.PageQuery{ConversationID: "exact", Direction: domain.DirectionNewest}, wantSeqs: sequenceRange(1, 100)},
 			{name: "gapsInTheSequenceAreFine", query: domain.PageQuery{ConversationID: "small", Direction: domain.DirectionNewest}, wantSeqs: []int{2, 5}},
-			{name: "afterAMessageAcrossAGap", query: domain.PageQuery{ConversationID: "small", Direction: domain.DirectionAfter, CursorID: 9001}, wantSeqs: []int{5}},
-			{name: "beforeAMessageAcrossAGap", query: domain.PageQuery{ConversationID: "small", Direction: domain.DirectionBefore, CursorID: 9002}, wantSeqs: []int{2}},
+			{name: "afterAMessageAcrossAGap", query: domain.PageQuery{ConversationID: "small", Direction: domain.DirectionAfter, CursorSequence: 2}, wantSeqs: []int{5}},
+			{name: "beforeAMessageAcrossAGap", query: domain.PageQuery{ConversationID: "small", Direction: domain.DirectionBefore, CursorSequence: 5}, wantSeqs: []int{2}},
 			{name: "unknownConversation", query: domain.PageQuery{ConversationID: "nope", Direction: domain.DirectionNewest}, wantErr: domain.ErrNotFound},
-			{name: "cursorOfAnotherConversation", query: domain.PageQuery{ConversationID: "big", Direction: domain.DirectionBefore, CursorID: 9001}, wantErr: domain.ErrInvalidCursor},
-			{name: "cursorThatDoesNotExist", query: domain.PageQuery{ConversationID: "big", Direction: domain.DirectionAfter, CursorID: 424242}, wantErr: domain.ErrInvalidCursor},
-			{name: "cursorInAnUnknownConversation", query: domain.PageQuery{ConversationID: "nope", Direction: domain.DirectionAfter, CursorID: 1001}, wantErr: domain.ErrNotFound},
+			{name: "cursorThatIsNoMessageOfTheConversation", query: domain.PageQuery{ConversationID: "big", Direction: domain.DirectionBefore, CursorSequence: 999}, wantErr: domain.ErrInvalidCursor},
+			{name: "cursorThatDoesNotExist", query: domain.PageQuery{ConversationID: "big", Direction: domain.DirectionAfter, CursorSequence: 424242}, wantErr: domain.ErrInvalidCursor},
+			{name: "cursorInAnUnknownConversation", query: domain.PageQuery{ConversationID: "nope", Direction: domain.DirectionAfter, CursorSequence: 1}, wantErr: domain.ErrNotFound},
 		}
 
 		for _, tt := range tests {
@@ -103,7 +103,7 @@ func TestRead(t *testing.T) {
 			if !page.HasMore {
 				break
 			}
-			query = domain.PageQuery{ConversationID: "big", Direction: domain.DirectionBefore, CursorID: page.Messages[0].OutboxID}
+			query = domain.PageQuery{ConversationID: "big", Direction: domain.DirectionBefore, CursorSequence: page.Messages[0].Sequence}
 		}
 
 		assert.Equal(t, sequenceRange(1, 250), got)
@@ -111,7 +111,7 @@ func TestRead(t *testing.T) {
 
 	t.Run("walkingForwardThroughAConversationVisitsEveryMessageOnce", func(t *testing.T) {
 		got := sequenceRange(1, 1) // the first message is the starting cursor
-		query := domain.PageQuery{ConversationID: "big", Direction: domain.DirectionAfter, CursorID: 1001}
+		query := domain.PageQuery{ConversationID: "big", Direction: domain.DirectionAfter, CursorSequence: 1}
 		for pages := 0; ; pages++ {
 			require.Less(t, pages, 10, "the walk ends")
 			page, err := repo.ListMessages(ctx, query)
@@ -120,7 +120,7 @@ func TestRead(t *testing.T) {
 			if !page.HasMore {
 				break
 			}
-			query = domain.PageQuery{ConversationID: "big", Direction: domain.DirectionAfter, CursorID: page.Messages[len(page.Messages)-1].OutboxID}
+			query = domain.PageQuery{ConversationID: "big", Direction: domain.DirectionAfter, CursorSequence: page.Messages[len(page.Messages)-1].Sequence}
 		}
 
 		assert.Equal(t, sequenceRange(1, 250), got)
@@ -133,7 +133,7 @@ func TestRead(t *testing.T) {
 		require.Len(t, page.Messages, 1)
 		m := page.Messages[0]
 		assert.Equal(t, "noaccount", m.ConversationID)
-		assert.Equal(t, int64(9200), m.OutboxID)
+		assert.Equal(t, 1, m.Sequence)
 		assert.Equal(t, domain.RoleMaker, m.Role)
 		assert.Equal(t, "text", m.Type)
 		assert.Equal(t, "GuardrailResponseSent", m.SourceEvent)
@@ -184,8 +184,8 @@ func TestRead(t *testing.T) {
 
 	t.Run("moreThanOneListPageSaysSo", func(t *testing.T) {
 		_, err := pool.Exec(ctx, `
-			INSERT INTO conversation_messages (conversation_id, sequence, outbox_id, role, author_id, text, source_event, id_yape_account, received_at)
-			SELECT 'many-' || lpad(s::text, 3, '0'), 1, 20000 + s, 'appUser', 'a', 'x', 'UserMessageSent', 'acc-many', '2026-10-21T00:00:00Z'::timestamptz + s * interval '1 second'
+			INSERT INTO conversation_messages (conversation_id, sequence, role, author_id, text, source_event, id_yape_account, received_at)
+			SELECT 'many-' || lpad(s::text, 3, '0'), 1, 'appUser', 'a', 'x', 'UserMessageSent', 'acc-many', '2026-10-21T00:00:00Z'::timestamptz + s * interval '1 second'
 			FROM generate_series(1, 120) s`)
 		require.NoError(t, err)
 

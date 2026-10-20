@@ -15,10 +15,10 @@ import (
 	"github.com/yaperos/ms-ml-conv-history-bs/internal/core/port/service"
 )
 
-func messagesWithIDs(ids ...int64) []domain.Message {
-	out := make([]domain.Message, 0, len(ids))
-	for i, id := range ids {
-		out = append(out, domain.Message{ConversationID: "conv", Sequence: i + 1, OutboxID: id})
+func messagesAt(sequences ...int) []domain.Message {
+	out := make([]domain.Message, 0, len(sequences))
+	for _, sequence := range sequences {
+		out = append(out, domain.Message{ConversationID: "conv", Sequence: sequence})
 	}
 
 	return out
@@ -41,45 +41,45 @@ func TestMessages(t *testing.T) {
 			name:      "noCursorAsksForTheNewestPage",
 			req:       service.MessagesRequest{ConversationID: "conv_v1_a"},
 			wantQuery: &domain.PageQuery{ConversationID: "conv_v1_a", Direction: domain.DirectionNewest},
-			page:      domain.Page{Messages: messagesWithIDs(1042, 1043, 1044), HasMore: true},
+			page:      domain.Page{Messages: messagesAt(42, 43, 44), HasMore: true},
 			want: domain.MessagePage{
-				ConversationID: "conv_v1_a", Direction: domain.DirectionNewest, Messages: messagesWithIDs(1042, 1043, 1044),
-				HasMore: true, BeforeCursor: "1042", AfterCursor: "1044",
+				ConversationID: "conv_v1_a", Direction: domain.DirectionNewest, Messages: messagesAt(42, 43, 44),
+				HasMore: true, BeforeCursor: "42", AfterCursor: "44",
 			},
 		},
 		{
 			name:      "beforeAsksForOlderMessages",
-			req:       service.MessagesRequest{ConversationID: "conv", Before: ptr("1042")},
-			wantQuery: &domain.PageQuery{ConversationID: "conv", Direction: domain.DirectionBefore, CursorID: 1042},
-			page:      domain.Page{Messages: messagesWithIDs(1030, 1031)},
+			req:       service.MessagesRequest{ConversationID: "conv", Before: ptr("42")},
+			wantQuery: &domain.PageQuery{ConversationID: "conv", Direction: domain.DirectionBefore, CursorSequence: 42},
+			page:      domain.Page{Messages: messagesAt(30, 31)},
 			want: domain.MessagePage{
-				ConversationID: "conv", Direction: domain.DirectionBefore, Messages: messagesWithIDs(1030, 1031),
-				BeforeCursor: "1030", AfterCursor: "1031",
+				ConversationID: "conv", Direction: domain.DirectionBefore, Messages: messagesAt(30, 31),
+				BeforeCursor: "30", AfterCursor: "31",
 			},
 		},
 		{
 			name:      "afterAsksForNewerMessages",
 			req:       service.MessagesRequest{ConversationID: "conv", After: ptr("7")},
-			wantQuery: &domain.PageQuery{ConversationID: "conv", Direction: domain.DirectionAfter, CursorID: 7},
-			page:      domain.Page{Messages: messagesWithIDs(8), HasMore: true},
+			wantQuery: &domain.PageQuery{ConversationID: "conv", Direction: domain.DirectionAfter, CursorSequence: 7},
+			page:      domain.Page{Messages: messagesAt(8), HasMore: true},
 			want: domain.MessagePage{
-				ConversationID: "conv", Direction: domain.DirectionAfter, Messages: messagesWithIDs(8),
+				ConversationID: "conv", Direction: domain.DirectionAfter, Messages: messagesAt(8),
 				HasMore: true, BeforeCursor: "8", AfterCursor: "8",
 			},
 		},
 		{
 			name:      "emptyPageHasNoCursors",
 			req:       service.MessagesRequest{ConversationID: "conv", After: ptr("9")},
-			wantQuery: &domain.PageQuery{ConversationID: "conv", Direction: domain.DirectionAfter, CursorID: 9},
+			wantQuery: &domain.PageQuery{ConversationID: "conv", Direction: domain.DirectionAfter, CursorSequence: 9},
 			page:      domain.Page{},
 			want:      domain.MessagePage{ConversationID: "conv", Direction: domain.DirectionAfter},
 		},
 		{
-			name:      "cursorsAreTheLargestIDsToo",
-			req:       service.MessagesRequest{ConversationID: "conv", Before: ptr("9223372036854775807")},
-			wantQuery: &domain.PageQuery{ConversationID: "conv", Direction: domain.DirectionBefore, CursorID: 9223372036854775807},
-			page:      domain.Page{Messages: messagesWithIDs(1)},
-			want:      domain.MessagePage{ConversationID: "conv", Direction: domain.DirectionBefore, Messages: messagesWithIDs(1), BeforeCursor: "1", AfterCursor: "1"},
+			name:      "cursorsAreTheLargestSequenceToo",
+			req:       service.MessagesRequest{ConversationID: "conv", Before: ptr("2147483647")},
+			wantQuery: &domain.PageQuery{ConversationID: "conv", Direction: domain.DirectionBefore, CursorSequence: 2147483647},
+			page:      domain.Page{Messages: messagesAt(1)},
+			want:      domain.MessagePage{ConversationID: "conv", Direction: domain.DirectionBefore, Messages: messagesAt(1), BeforeCursor: "1", AfterCursor: "1"},
 		},
 		{name: "bothCursorsAreRefused", req: service.MessagesRequest{ConversationID: "conv", Before: ptr("1"), After: ptr("2")}, wantErr: domain.ErrInvalidRequest, wantErrText: "cannot be used together"},
 		{name: "emptyConversationID", req: service.MessagesRequest{}, wantErr: domain.ErrInvalidRequest, wantErrText: "conversation id"},
@@ -95,7 +95,8 @@ func TestMessages(t *testing.T) {
 		{name: "cursorNegative", req: service.MessagesRequest{ConversationID: "conv", After: ptr("-4")}, wantErr: domain.ErrInvalidCursor},
 		{name: "cursorWithAPlusSign", req: service.MessagesRequest{ConversationID: "conv", Before: ptr("+5")}, wantErr: domain.ErrInvalidCursor},
 		{name: "cursorWithLeadingZeros", req: service.MessagesRequest{ConversationID: "conv", Before: ptr("05")}, wantErr: domain.ErrInvalidCursor},
-		{name: "cursorTooBig", req: service.MessagesRequest{ConversationID: "conv", After: ptr("9223372036854775808")}, wantErr: domain.ErrInvalidCursor},
+		{name: "cursorTooBig", req: service.MessagesRequest{ConversationID: "conv", After: ptr("2147483648")}, wantErr: domain.ErrInvalidCursor},
+		{name: "cursorBeyondAnInt64", req: service.MessagesRequest{ConversationID: "conv", After: ptr("9223372036854775808")}, wantErr: domain.ErrInvalidCursor},
 		{
 			name:      "unknownConversation",
 			req:       service.MessagesRequest{ConversationID: "conv"},
@@ -105,7 +106,7 @@ func TestMessages(t *testing.T) {
 		{
 			name:      "cursorOfAnotherConversation",
 			req:       service.MessagesRequest{ConversationID: "conv", Before: ptr("3")},
-			wantQuery: &domain.PageQuery{ConversationID: "conv", Direction: domain.DirectionBefore, CursorID: 3},
+			wantQuery: &domain.PageQuery{ConversationID: "conv", Direction: domain.DirectionBefore, CursorSequence: 3},
 			repoErr:   domain.ErrInvalidCursor, wantErr: domain.ErrInvalidCursor,
 		},
 		{

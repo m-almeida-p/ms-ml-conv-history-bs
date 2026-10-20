@@ -56,7 +56,7 @@ func (s *Stats) Snapshot() StatsSnapshot {
 	}
 }
 
-// Consumer reads the outbox topic, stores each event and commits its offset only
+// Consumer reads the conversation events topic, stores each event and commits its offset only
 // after the store succeeded.
 //
 //   - A record it cannot decode, or an event the store refuses for good, is
@@ -71,6 +71,7 @@ type Consumer struct {
 	log     Logger
 	backoff Backoff
 	sleep   func(ctx context.Context, d time.Duration) error
+	grace   time.Duration
 	stats   Stats
 }
 
@@ -82,9 +83,20 @@ func WithBackoff(b Backoff) ConsumerOption {
 	return func(c *Consumer) { c.backoff = b }
 }
 
+// DefaultShutdownGrace is how long Run waits for the shutdown signal to reach its
+// context after the source has ended.
+const DefaultShutdownGrace = time.Second
+
+// WithShutdownGrace sets how long Run waits for ctx to be cancelled when the
+// source ends without it. The library and the process's own signal handler get the
+// same signal and either can run first.
+func WithShutdownGrace(d time.Duration) ConsumerOption {
+	return func(c *Consumer) { c.grace = d }
+}
+
 // NewConsumer returns a consumer over source that stores through ingest.
 func NewConsumer(source resource.MessageSource, ingest service.Projection, log Logger, opts ...ConsumerOption) *Consumer {
-	c := &Consumer{source: source, ingest: ingest, log: log, backoff: DefaultBackoff, sleep: sleepContext}
+	c := &Consumer{source: source, ingest: ingest, log: log, backoff: DefaultBackoff, sleep: sleepContext, grace: DefaultShutdownGrace}
 	for _, opt := range opts {
 		opt(c)
 	}
@@ -97,25 +109,57 @@ func (c *Consumer) Stats() StatsSnapshot {
 	return c.stats.Snapshot()
 }
 
-// Run consumes until the source stops, then logs the totals. The source ends
-// when the process gets SIGINT or SIGTERM, or on a fatal broker error.
+// Run consumes until the source stops, then logs the totals. ctx is cancelled by
+// the shutdown signal. The Kafka library ends its loop quietly, with no error,
+// both on that signal and on a fatal broker error; only the first is a clean
+// stop, so a source that ends with ctx still live is reported as a failure and
+// the process exits non-zero.
 func (c *Consumer) Run(ctx context.Context) error {
 	err := c.source.Consume(ctx, func(msg resource.Message) error { return c.handle(ctx, msg) })
+	if err == nil && !c.stoppedBySignal(ctx) {
+		err = errors.New("kafka source stopped without a shutdown signal")
+	}
 
 	s := c.stats.Snapshot()
 	c.log.Infof("consumer stopped: stored=%d projected=%d duplicates=%d invalid=%d tombstones=%d malformed=%d rejected=%d retries=%d",
 		s.Stored, s.Projected, s.Duplicates, s.Invalid, s.Tombstones, s.Malformed, s.Rejected, s.Retries)
 
 	if err != nil {
-		return fmt.Errorf("consume %w", err)
+		return fmt.Errorf("consume: %w", err)
 	}
 
 	return nil
 }
 
+// stoppedBySignal reports whether ctx is cancelled, waiting up to the grace for it.
+func (c *Consumer) stoppedBySignal(ctx context.Context) bool {
+	if ctx.Err() != nil {
+		return true
+	}
+
+	timer := time.NewTimer(c.grace)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return true
+	case <-timer.C:
+		return false
+	}
+}
+
 // handle deals with one record. It returns an error only when the record was left
 // uncommitted, so the broker will deliver it again.
+//
+// Once ctx is cancelled it handles nothing. The library logs a callback error and
+// may still hand out one more record before its own signal stops the loop; a
+// malformed record or a tombstone would be committed without touching the store,
+// and that commit would cover the offset of an event left unstored just before.
 func (c *Consumer) handle(ctx context.Context, msg resource.Message) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("stopped before record %s/%d/%d was handled: %w", msg.Topic, msg.Partition, msg.Offset, err)
+	}
+
 	event, err := Decode(msg)
 
 	var decodeErr *DecodeError
@@ -135,8 +179,7 @@ func (c *Consumer) handle(ctx context.Context, msg resource.Message) error {
 	switch {
 	case errors.Is(err, domain.ErrRejected):
 		c.stats.Rejected.Add(1)
-		c.log.Errorf("skipping event %d of %s/%d/%d, the store refuses it for good: %v",
-			event.OutboxID, msg.Topic, msg.Partition, msg.Offset, err)
+		c.log.Errorf("skipping event, the store refuses it for good: %v", err)
 
 		return c.commit(msg)
 	case err != nil:
@@ -159,14 +202,14 @@ func (c *Consumer) store(ctx context.Context, event domain.InboxEvent) (domain.A
 			return result, err
 		}
 		if ctx.Err() != nil {
-			return domain.ApplyResult{}, fmt.Errorf("stopped before event %d was stored: %w", event.OutboxID, ctx.Err())
+			return domain.ApplyResult{}, fmt.Errorf("stopped before event %s was stored: %w", event.Ref(), ctx.Err())
 		}
 
 		c.stats.Retries.Add(1)
-		c.log.Errorf("event %d was not stored, trying again in %s: %v", event.OutboxID, delay, err)
+		c.log.Errorf("event %s was not stored, trying again in %s: %v", event.Ref(), delay, err)
 
 		if err := c.sleep(ctx, delay); err != nil {
-			return domain.ApplyResult{}, fmt.Errorf("stopped before event %d was stored: %w", event.OutboxID, err)
+			return domain.ApplyResult{}, fmt.Errorf("stopped before event %s was stored: %w", event.Ref(), err)
 		}
 		delay = min(delay*2, c.backoff.Max)
 	}
@@ -175,7 +218,7 @@ func (c *Consumer) store(ctx context.Context, event domain.InboxEvent) (domain.A
 func (c *Consumer) count(event domain.InboxEvent, result domain.ApplyResult) {
 	if !result.Applied {
 		c.stats.Duplicates.Add(1)
-		c.log.Debugf("event %d was already stored", event.OutboxID)
+		c.log.Debugf("event %s was already stored", event.Ref())
 
 		return
 	}
@@ -186,16 +229,14 @@ func (c *Consumer) count(event domain.InboxEvent, result domain.ApplyResult) {
 	}
 	if result.Invalid {
 		c.stats.Invalid.Add(1)
-		c.log.Warnf("event %d (%s) should have added a chat message but lacks its text; stored without one", event.OutboxID, event.EventName)
+		c.log.Warnf("event %s (%s) should have added a chat message but lacks its text; stored without one", event.Ref(), event.EventName)
 	}
 }
 
 func (c *Consumer) commit(msg resource.Message) error {
 	if err := c.source.Commit(msg); err != nil {
-		// A later commit covers this offset. If none comes, the broker redelivers
-		// the record and the inbox ignores it.
-		c.log.Warnf("offset of %s/%d/%d was not committed: %v", msg.Topic, msg.Partition, msg.Offset, err)
-
+		// The library logs the returned error. A later commit covers this offset; if
+		// none comes, the broker redelivers the record and the inbox ignores it.
 		return fmt.Errorf("commit %s/%d/%d: %w", msg.Topic, msg.Partition, msg.Offset, err)
 	}
 

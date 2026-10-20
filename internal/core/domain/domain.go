@@ -5,6 +5,8 @@ package domain
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"regexp"
 	"time"
 )
 
@@ -37,14 +39,15 @@ const (
 var ErrInvalidEvent = errors.New("invalid event")
 
 // ErrRejected marks an event the store refuses for good, such as a violated
-// constraint. Trying again cannot help, so a consumer skips it. The error
-// carries the constraint name and code, never the row.
+// constraint or a stream position that already holds another event. Trying again
+// cannot help, so a consumer skips it. The error carries the constraint name and
+// code, never the row.
 var ErrRejected = errors.New("event rejected by the store")
 
-// InboxEvent is one outbox row as it arrived from Kafka. Payload and Metadata
+// InboxEvent is one conversation_events row as it arrived from Kafka. Its stream
+// position, ConversationID and Sequence, is its identity. Payload and Metadata
 // hold JSON. An absent CorrelationID, IDYapeAccount or Actor is the empty string.
 type InboxEvent struct {
-	OutboxID       int64
 	ConversationID string
 	Sequence       int
 	EventName      string
@@ -62,11 +65,26 @@ type InboxEvent struct {
 	KafkaOffset    int64
 }
 
+// Ref names the event by where its record sits in Kafka, for logs and errors.
+// The coordinates find the record; no conversation id, account or content is in
+// them, so they are safe to log.
+func (e InboxEvent) Ref() string {
+	return fmt.Sprintf("%s/%d/%d", e.KafkaTopic, e.KafkaPartition, e.KafkaOffset)
+}
+
+// identifier is what a conversation id or an account id may look like. The
+// decoder and the API share it, so everything stored can be asked for.
+var identifier = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
+
+// ValidIdentifier reports whether id can be a conversation id or an account id.
+func ValidIdentifier(id string) bool {
+	return identifier.MatchString(id)
+}
+
 // Message is one line of the chat between the user and the assistant.
 type Message struct {
 	ConversationID string
 	Sequence       int
-	OutboxID       int64
 	Role           Role
 	AuthorID       string
 	Type           string
@@ -124,12 +142,12 @@ var (
 	ErrInvalidRequest = errors.New("invalid request")
 )
 
-// PageQuery asks for one page of a conversation. CursorID is the outbox id of a
-// message of that conversation, and is ignored for DirectionNewest.
+// PageQuery asks for one page of a conversation. CursorSequence is the sequence
+// of a message of that conversation, and is ignored for DirectionNewest.
 type PageQuery struct {
 	ConversationID string
 	Direction      Direction
-	CursorID       int64
+	CursorSequence int
 }
 
 // Page is what the store returns: up to PageSize messages in ascending order of

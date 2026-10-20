@@ -12,8 +12,9 @@ import (
 // InboxRepository stores received events and the chat messages they project to.
 type InboxRepository interface {
 	// Apply stores the event and, when message is not nil, its chat message, in
-	// one transaction. An outbox id seen before writes nothing and returns
-	// Applied=false. Storing a skipped event (nil message) still marks it projected.
+	// one transaction. An event seen before (same conversation and
+	// sequence) writes nothing and returns Applied=false; a different event at a
+	// position already taken is domain.ErrRejected. Storing a skipped event (nil message) still marks it projected.
 	Apply(ctx context.Context, event domain.InboxEvent, message *domain.Message) (domain.ApplyResult, error)
 
 	// Rebuild empties the chat messages and replays every inbox event through

@@ -91,7 +91,6 @@ func (s *Service) Project(event domain.InboxEvent) (*domain.Message, error) {
 	return &domain.Message{
 		ConversationID: event.ConversationID,
 		Sequence:       event.Sequence,
-		OutboxID:       event.OutboxID,
 		Role:           role,
 		AuthorID:       authorID,
 		Type:           domain.MessageTypeText,

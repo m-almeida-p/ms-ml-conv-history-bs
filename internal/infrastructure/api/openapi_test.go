@@ -173,8 +173,8 @@ func TestOpenAPIDocumentsExactlyTheRoutesServed(t *testing.T) {
 func TestRepliesConformToTheOpenAPISpec(t *testing.T) {
 	s := loadSpec(t)
 	at := time.Date(2026, 10, 20, 14, 7, 23, 792_000_000, time.UTC)
-	message := func(id int64, role domain.Role, event string, truncated bool) domain.Message {
-		return domain.Message{ConversationID: "conv_v1_a", Sequence: 2, OutboxID: id, Role: role, AuthorID: "acc-1", Type: "text",
+	message := func(sequence int, role domain.Role, event string, truncated bool) domain.Message {
+		return domain.Message{ConversationID: "conv_v1_a", Sequence: sequence, Role: role, AuthorID: "acc-1", Type: "text",
 			Text: "hola", Truncated: truncated, SourceEvent: event, ReceivedAt: at}
 	}
 

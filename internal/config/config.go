@@ -29,8 +29,7 @@ type Config struct {
 
 // ServerConfig configures the HTTP reader.
 type ServerConfig struct {
-	Port        int    `yaml:"port"`
-	Environment string `yaml:"environment"`
+	Port int `yaml:"port"`
 }
 
 // PostgresConfig configures the pool. DSN, when set, wins over the discrete
@@ -51,11 +50,30 @@ type PostgresConfig struct {
 }
 
 // KafkaConfig configures the consumer. Brokers is a comma-separated list.
+//
+// MaxPollIntervalMs is how long the consumer may go without polling before the
+// broker takes its partitions away. A store that keeps failing blocks polling (the
+// event is retried in place), so this bounds how long an outage the consumer rides
+// out without leaving the group. SessionTimeoutMs is how long the broker waits for a
+// heartbeat; the broker enforces its own minimum (6000 by default).
 type KafkaConfig struct {
-	Brokers         string `yaml:"brokers"`
-	Topic           string `yaml:"topic"`
-	GroupID         string `yaml:"group_id"`
-	AutoOffsetReset string `yaml:"auto_offset_reset"`
+	Brokers           string `yaml:"brokers"`
+	Topic             string `yaml:"topic"`
+	GroupID           string `yaml:"group_id"`
+	AutoOffsetReset   string `yaml:"auto_offset_reset"`
+	MaxPollIntervalMs int    `yaml:"max_poll_interval_ms"`
+	SessionTimeoutMs  int    `yaml:"session_timeout_ms"`
+}
+
+// Warnings lists settings that are valid but risky, for the caller to log at
+// startup.
+func (k KafkaConfig) Warnings() []string {
+	var warnings []string
+	if k.AutoOffsetReset == "latest" {
+		warnings = append(warnings, "kafka.auto_offset_reset is latest: a group with no committed offset (a new group, or offsets that expired) starts at the end of the topic and skips the history before it; the inbox is the only durable copy, so use earliest unless that is the intent")
+	}
+
+	return warnings
 }
 
 // LoggingConfig configures lib-go-log.
@@ -226,6 +244,12 @@ func validateKafka(cfg KafkaConfig) error {
 	}
 	if !slices.Contains(supportedOffsetResets, cfg.AutoOffsetReset) {
 		return fmt.Errorf("kafka.auto_offset_reset must be one of %s", strings.Join(supportedOffsetResets, ", "))
+	}
+	if cfg.SessionTimeoutMs < 1000 {
+		return fmt.Errorf("kafka.session_timeout_ms must be at least 1000")
+	}
+	if cfg.MaxPollIntervalMs < cfg.SessionTimeoutMs {
+		return fmt.Errorf("kafka.max_poll_interval_ms must not be below kafka.session_timeout_ms")
 	}
 
 	return nil

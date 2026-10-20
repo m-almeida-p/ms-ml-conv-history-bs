@@ -61,10 +61,10 @@ func waitForMessages(t *testing.T, pool *pgxpool.Pool, conversationID string, n 
 	})
 }
 
-// TestPipelineThroughDebezium inserts rows into the agent's outbox, as the agent
-// does, and waits for the chat to appear in the history: outbox -> WAL ->
-// Debezium -> Kafka -> consumer -> inbox -> messages. It needs the local cluster
-// with the conversation-outbox connector running. The history database is a
+// TestPipelineThroughDebezium inserts rows into the agent's event store, as the
+// agent does, and waits for the chat to appear in the history: conversation_events
+// -> WAL -> Debezium -> Kafka -> consumer -> inbox -> messages. It needs the local
+// cluster with the conversation-events connector running. The history database is a
 // throwaway one; the topic and the agent's database are the real ones, and the
 // rows are removed afterwards.
 func TestPipelineThroughDebezium(t *testing.T) {
@@ -80,8 +80,8 @@ func TestPipelineThroughDebezium(t *testing.T) {
 
 	conversation := uniqueName("pipeline-dbz")
 	t.Cleanup(func() {
-		_, err := agent.Exec(context.Background(), "DELETE FROM conversation_outbox WHERE conversation_id = $1", conversation)
-		assert.NoError(t, err, "the test rows are removed from the agent's outbox")
+		_, err := agent.Exec(context.Background(), "DELETE FROM conversation_events WHERE conversation_id IN ($1, $2)", conversation, conversation+"-after")
+		assert.NoError(t, err, "the test rows are removed from the agent's event store")
 	})
 
 	// Three chat messages among six events, as an agent turn leaves them.
@@ -97,20 +97,25 @@ func TestPipelineThroughDebezium(t *testing.T) {
 		{"UserMessageBlocked", `{"reason": "jailbreak"}`},
 	}
 
-	consumer := startConsumer(t, consumerBinary(t), s.brokers, "yape.public.conversation_outbox", uniqueName("pipeline-group"), historyDSN)
+	consumer := startConsumer(t, consumerBinary(t), s.brokers, "yape.public.conversation_events", uniqueName("pipeline-group"), historyDSN)
 
 	tx, err := agent.Begin(ctx)
 	require.NoError(t, err)
 	for i, e := range events {
 		_, err := tx.Exec(ctx, `
-			INSERT INTO conversation_outbox (conversation_id, event_name, event_version, sequence, payload, metadata, correlation_id, id_yape_account, actor, published, created_at)
-			VALUES ($1, $2, 1, $3, $4::jsonb, '{"actor": "user"}'::jsonb, 'corr-pipeline', 'acc-pipeline', 'user', FALSE, now())`,
+			INSERT INTO conversation_events (conversation_id, sequence, event_name, event_version, payload, metadata, correlation_id, id_yape_account, actor, occurred_at)
+			VALUES ($1, $3, $2, 1, $4::jsonb, '{"actor": "user"}'::jsonb, 'corr-pipeline', 'acc-pipeline', 'user', now())`,
 			conversation, e.name, i+1, e.payload)
 		require.NoError(t, err)
 	}
 	require.NoError(t, tx.Commit(ctx))
 
+	// The sixth event follows the last chat message in the stream: wait for it too,
+	// or the counts below race the consumer, which first reads the topic's backlog.
 	waitForMessages(t, history, conversation, 3)
+	eventually(t, 90*time.Second, "six inbox rows of "+conversation, func() bool {
+		return countWhere(t, history, "conversation_inbox", conversation) >= len(events)
+	})
 
 	assert.Equal(t, []chatRow{
 		{Sequence: 2, Role: "appUser", Author: "acc-pipeline", Text: "quiero yapear", SourceEvent: "UserMessageSent"},
@@ -124,7 +129,20 @@ func TestPipelineThroughDebezium(t *testing.T) {
 		"SELECT count(*) FROM conversation_inbox WHERE conversation_id = $1 AND projected_at IS NULL", conversation).Scan(&unstamped))
 	assert.Zero(t, unstamped)
 
+	// Deleting a closed conversation from the event store is not published: the
+	// history keeps its copy, and no tombstone reaches the consumer. An event
+	// written after the delete shows the consumer has read past it.
+	_, err = agent.Exec(ctx, "DELETE FROM conversation_events WHERE conversation_id = $1", conversation)
+	require.NoError(t, err)
+	after := conversation + "-after"
+	insertChat(t, agent, after, 1, 1)
+	waitForMessages(t, history, after, 1)
+
+	assert.Equal(t, 3, countWhere(t, history, "conversation_messages", conversation), "the history keeps the deleted conversation")
+	assert.Equal(t, 6, countWhere(t, history, "conversation_inbox", conversation))
+
 	consumer.stop(t)
+	assert.Zero(t, summaryTotals(t, consumer.out.String())["tombstones"], "the delete was not published")
 }
 
 // TestPipelineTopic feeds the consumer binary records it builds itself, on a
@@ -142,18 +160,14 @@ func TestPipelineTopic(t *testing.T) {
 	consumer := startConsumer(t, consumerBinary(t), s.brokers, topic, group, historyDSN)
 
 	// marker is an event after which we know the partition has been read this far.
-	nextID := int64(9_000_000)
 	marker := func(conversation string, partition int32, sequence int) {
-		nextID++
-		prod.send(topic, partition, outboxKey(nextID), outboxValue(nextID, conversation, sequence, "AgentMessageSent", map[string]any{"text": "marker"}))
+		prod.send(topic, partition, eventKey(conversation), eventValue(conversation, sequence, "AgentMessageSent", map[string]any{"text": "marker"}))
 	}
 
 	t.Run("sameRecordThreeTimesIsStoredOnce", func(t *testing.T) {
 		conversation := uniqueName("dup")
-		nextID++
-		id := nextID
 		for range 3 {
-			prod.send(topic, 0, outboxKey(id), outboxValue(id, conversation, 1, "UserMessageSent", map[string]any{"text": "hola"}))
+			prod.send(topic, 0, eventKey(conversation), eventValue(conversation, 1, "UserMessageSent", map[string]any{"text": "hola"}))
 		}
 		marker(conversation, 0, 2)
 
@@ -169,12 +183,11 @@ func TestPipelineTopic(t *testing.T) {
 	t.Run("reverseOrderAcrossPartitionsReadsBackInOrder", func(t *testing.T) {
 		conversation := uniqueName("rev")
 		for seq := 5; seq >= 1; seq-- {
-			nextID++
 			name := "UserMessageSent"
 			if seq%2 == 0 {
 				name = "AgentMessageSent"
 			}
-			prod.send(topic, int32(seq%3), outboxKey(nextID), outboxValue(nextID, conversation, seq, name, map[string]any{"text": fmt.Sprintf("m%d", seq)}))
+			prod.send(topic, int32(seq%3), eventKey(conversation), eventValue(conversation, seq, name, map[string]any{"text": fmt.Sprintf("m%d", seq)}))
 		}
 
 		waitForMessages(t, history, conversation, 5)
@@ -194,7 +207,7 @@ func TestPipelineTopic(t *testing.T) {
 		var before int
 		require.NoError(t, history.QueryRow(context.Background(), "SELECT count(*) FROM conversation_inbox").Scan(&before))
 
-		prod.send(topic, 2, outboxKey(9_999_999), nil)
+		prod.send(topic, 2, eventKey("deleted-conversation"), nil)
 		marker(conversation, 2, 1)
 		waitForMessages(t, history, conversation, 1)
 
@@ -205,7 +218,7 @@ func TestPipelineTopic(t *testing.T) {
 
 	t.Run("malformedRecordDoesNotBlockThePartition", func(t *testing.T) {
 		conversation := uniqueName("bad")
-		prod.send(topic, 1, []byte("k"), framed(4, []byte(`{"id": "not a number", "payload": "secret-card-4111"}`)))
+		prod.send(topic, 1, []byte("k"), framed(4, []byte(`{"sequence": "not a number", "payload": "secret-card-4111"}`)))
 		prod.send(topic, 1, []byte("k"), []byte("not json at all"))
 		marker(conversation, 1, 1)
 
@@ -216,16 +229,27 @@ func TestPipelineTopic(t *testing.T) {
 		conversation := uniqueName("unstorable")
 
 		// A NUL character in the payload: well-formed JSON that Postgres refuses for good.
-		nextID++
-		prod.send(topic, 0, outboxKey(nextID), outboxValue(nextID, conversation, 1, "UserMessageSent", map[string]any{"text": "a\x00b"}))
+		prod.send(topic, 0, eventKey(conversation), eventValue(conversation, 1, "UserMessageSent", map[string]any{"text": "a\x00b"}))
 		// A sequence no INT column can hold: refused by the decoder.
-		nextID++
-		prod.send(topic, 0, outboxKey(nextID), outboxValue(nextID, conversation, 3_000_000_000, "UserMessageSent", map[string]any{"text": "far away"}))
+		prod.send(topic, 0, eventKey(conversation), eventValue(conversation, 3_000_000_000, "UserMessageSent", map[string]any{"text": "far away"}))
 		marker(conversation, 0, 2)
 
 		waitForMessages(t, history, conversation, 1)
 
 		assert.Equal(t, 1, countWhere(t, history, "conversation_inbox", conversation), "only the marker is stored")
+	})
+
+	t.Run("anotherEventAtAUsedPositionIsSkippedAndTheFirstStays", func(t *testing.T) {
+		conversation := uniqueName("reused")
+		prod.send(topic, 0, eventKey(conversation), eventValue(conversation, 1, "UserMessageSent", map[string]any{"text": "first"}))
+		prod.send(topic, 0, eventKey(conversation), eventValue(conversation, 1, "UserMessageSent", map[string]any{"text": "second"}))
+		marker(conversation, 0, 2)
+
+		waitForMessages(t, history, conversation, 2)
+
+		got := messagesOf(t, history, conversation)
+		require.Len(t, got, 2)
+		assert.Equal(t, "first", got[0].Text, "the second event at the position did not replace the first")
 	})
 
 	consumer.stop(t)
@@ -240,7 +264,7 @@ func TestPipelineTopic(t *testing.T) {
 	assert.Equal(t, 2, totals["duplicates"], "the record sent three times")
 	assert.Equal(t, 1, totals["tombstones"])
 	assert.Equal(t, 3, totals["malformed"], "two broken records and the sequence out of range")
-	assert.Equal(t, 1, totals["rejected"], "the NUL character the store refuses")
+	assert.Equal(t, 2, totals["rejected"], "the NUL character the store refuses and the event at a used position")
 	assert.Zero(t, totals["retries"])
 	assert.NotContains(t, consumer.out.String(), "secret-card-4111", "no record content in the logs")
 }

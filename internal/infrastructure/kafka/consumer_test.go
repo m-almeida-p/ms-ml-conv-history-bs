@@ -26,11 +26,15 @@ type fakeSource struct {
 	commitErr   error
 	journal     *journal
 	handleError []error
+	onDone      func() // runs after the last record, as the shutdown signal would
 }
 
 func (f *fakeSource) Consume(_ context.Context, handle func(resource.Message) error) error {
 	for _, m := range f.messages {
 		f.handleError = append(f.handleError, handle(m))
+	}
+	if f.onDone != nil {
+		f.onDone()
 	}
 
 	return f.consumeErr
@@ -79,8 +83,8 @@ func TestConsumerHandle(t *testing.T) {
 	const secret = "card-4111-1111"
 
 	storeDown := errors.New("connection reset")
-	rejected := fmt.Errorf("insert inbox event 7: %w: constraint %q (23505)", domain.ErrRejected, "conversation_inbox_stream_key")
-	badValue := `{"id": "` + secret + `"}`
+	rejected := fmt.Errorf("insert inbox event yape.public.conversation_events/1/41: %w: constraint %q (23505)", domain.ErrRejected, "conversation_inbox_stream_key")
+	badValue := `{"sequence": "` + secret + `"}`
 	backoff := Backoff{Initial: time.Second, Max: 3 * time.Second}
 
 	// handleResult is what Handle returns on its nth call.
@@ -95,6 +99,7 @@ func TestConsumerHandle(t *testing.T) {
 		results      []handleResult
 		commitErr    error
 		cancelled    bool
+		wantNoSteps  bool // nothing was handled, committed or slept
 		wantHandle   int
 		wantSleeps   []time.Duration
 		wantJournal  []string
@@ -108,7 +113,7 @@ func TestConsumerHandle(t *testing.T) {
 			value:       validBody,
 			results:     []handleResult{{result: domain.ApplyResult{Applied: true, Projected: true}}},
 			wantHandle:  1,
-			wantJournal: []string{"handle 7", "commit 41"},
+			wantJournal: []string{"handle yape.public.conversation_events/1/41", "commit 41"},
 			wantStats:   StatsSnapshot{Stored: 1, Projected: 1},
 		},
 		{
@@ -116,7 +121,7 @@ func TestConsumerHandle(t *testing.T) {
 			value:       validBody,
 			results:     []handleResult{{result: domain.ApplyResult{Applied: true}}},
 			wantHandle:  1,
-			wantJournal: []string{"handle 7", "commit 41"},
+			wantJournal: []string{"handle yape.public.conversation_events/1/41", "commit 41"},
 			wantStats:   StatsSnapshot{Stored: 1},
 		},
 		{
@@ -124,7 +129,7 @@ func TestConsumerHandle(t *testing.T) {
 			value:       validBody,
 			results:     []handleResult{{result: domain.ApplyResult{}}},
 			wantHandle:  1,
-			wantJournal: []string{"handle 7", "commit 41"},
+			wantJournal: []string{"handle yape.public.conversation_events/1/41", "commit 41"},
 			wantStats:   StatsSnapshot{Duplicates: 1},
 		},
 		{
@@ -132,9 +137,9 @@ func TestConsumerHandle(t *testing.T) {
 			value:        validBody,
 			results:      []handleResult{{result: domain.ApplyResult{Applied: true, Invalid: true}}},
 			wantHandle:   1,
-			wantJournal:  []string{"handle 7", "commit 41"},
+			wantJournal:  []string{"handle yape.public.conversation_events/1/41", "commit 41"},
 			wantStats:    StatsSnapshot{Stored: 1, Invalid: 1},
-			wantLogHas:   []string{"warn event 7 (UserMessageSent) should have added a chat message"},
+			wantLogHas:   []string{"warn event yape.public.conversation_events/1/41 (UserMessageSent) should have added a chat message"},
 			wantLogLacks: []string{"hola"},
 		},
 		{
@@ -143,7 +148,7 @@ func TestConsumerHandle(t *testing.T) {
 			wantHandle:   0,
 			wantJournal:  []string{"commit 41"},
 			wantStats:    StatsSnapshot{Malformed: 1},
-			wantLogHas:   []string{"warn skipping a record that cannot be decoded: decode record " + topic + "/1/41", "field has the wrong type (id)"},
+			wantLogHas:   []string{"warn skipping a record that cannot be decoded: decode record " + topic + "/1/41", "field has the wrong type (sequence)"},
 			wantLogLacks: []string{secret},
 		},
 		{
@@ -158,9 +163,9 @@ func TestConsumerHandle(t *testing.T) {
 			value:        validBody,
 			results:      []handleResult{{err: rejected}},
 			wantHandle:   1,
-			wantJournal:  []string{"handle 7", "commit 41"},
+			wantJournal:  []string{"handle yape.public.conversation_events/1/41", "commit 41"},
 			wantStats:    StatsSnapshot{Rejected: 1},
-			wantLogHas:   []string{"error skipping event 7", `constraint "conversation_inbox_stream_key" (23505)`},
+			wantLogHas:   []string{"error skipping event, the store refuses it for good", `constraint "conversation_inbox_stream_key" (23505)`},
 			wantLogLacks: []string{"hola"},
 		},
 		{
@@ -169,9 +174,9 @@ func TestConsumerHandle(t *testing.T) {
 			results:     []handleResult{{err: storeDown}, {err: storeDown}, {result: domain.ApplyResult{Applied: true, Projected: true}}},
 			wantHandle:  3,
 			wantSleeps:  []time.Duration{time.Second, 2 * time.Second},
-			wantJournal: []string{"handle 7", "sleep 1s", "handle 7", "sleep 2s", "handle 7", "commit 41"},
+			wantJournal: []string{"handle yape.public.conversation_events/1/41", "sleep 1s", "handle yape.public.conversation_events/1/41", "sleep 2s", "handle yape.public.conversation_events/1/41", "commit 41"},
 			wantStats:   StatsSnapshot{Stored: 1, Projected: 1, Retries: 2},
-			wantLogHas:  []string{"error event 7 was not stored, trying again in 1s: connection reset"},
+			wantLogHas:  []string{"error event yape.public.conversation_events/1/41 was not stored, trying again in 1s: connection reset"},
 		},
 		{
 			name:  "waitGrowsToTheCapAndStaysThere",
@@ -192,29 +197,44 @@ func TestConsumerHandle(t *testing.T) {
 			cancelled:   false,
 			wantHandle:  1,
 			wantSleeps:  []time.Duration{time.Second},
-			wantJournal: []string{"handle 7", "sleep 1s"},
-			wantErr:     "stopped before event 7 was stored: context canceled",
+			wantJournal: []string{"handle yape.public.conversation_events/1/41", "sleep 1s"},
+			wantErr:     "stopped before event yape.public.conversation_events/1/41 was stored: context canceled",
 			wantStats:   StatsSnapshot{Retries: 1},
 		},
 		{
-			name:        "alreadyStoppedDoesNotRetry",
+			name:        "alreadyStoppedHandlesNothing",
 			value:       validBody,
-			results:     []handleResult{{err: storeDown}},
 			cancelled:   true,
-			wantHandle:  1,
-			wantJournal: []string{"handle 7"},
-			wantErr:     "stopped before event 7 was stored: context canceled",
+			wantNoSteps: true,
+			wantErr:     "stopped before record " + topic + "/1/41 was handled: context canceled",
+		},
+		// After a stop the broker library can still hand out one more record. A
+		// record that never reaches the store must not be committed then: its
+		// commit would cover the earlier, unstored offset of the same partition.
+		{
+			name:        "malformedRecordAfterTheStopIsNotCommitted",
+			value:       "{broken",
+			cancelled:   true,
+			wantNoSteps: true,
+			wantErr:     "stopped before record " + topic + "/1/41 was handled: context canceled",
 		},
 		{
-			name:        "commitFailureIsReportedAndLeavesTheOffsetBehind",
-			value:       validBody,
-			results:     []handleResult{{result: domain.ApplyResult{Applied: true}}},
-			commitErr:   errors.New("broker not available"),
-			wantHandle:  1,
-			wantJournal: []string{"handle 7", "commit 41"},
-			wantErr:     "commit " + topic + "/1/41: broker not available",
-			wantStats:   StatsSnapshot{Stored: 1},
-			wantLogHas:  []string{"warn offset of " + topic + "/1/41 was not committed"},
+			name:        "tombstoneAfterTheStopIsNotCommitted",
+			value:       "",
+			cancelled:   true,
+			wantNoSteps: true,
+			wantErr:     "stopped before record " + topic + "/1/41 was handled: context canceled",
+		},
+		{
+			name:         "commitFailureIsReportedAndLeavesTheOffsetBehind",
+			value:        validBody,
+			results:      []handleResult{{result: domain.ApplyResult{Applied: true}}},
+			commitErr:    errors.New("broker not available"),
+			wantHandle:   1,
+			wantJournal:  []string{"handle yape.public.conversation_events/1/41", "commit 41"},
+			wantErr:      "commit " + topic + "/1/41: broker not available",
+			wantStats:    StatsSnapshot{Stored: 1},
+			wantLogLacks: []string{"was not committed"},
 		},
 	}
 
@@ -233,7 +253,7 @@ func TestConsumerHandle(t *testing.T) {
 				},
 				func(_ context.Context, e domain.InboxEvent) error {
 					r := tt.results[calls]
-					j.add(fmt.Sprintf("handle %d", e.OutboxID))
+					j.add("handle " + e.Ref())
 					calls++
 					return r.err
 				},
@@ -244,6 +264,7 @@ func TestConsumerHandle(t *testing.T) {
 			if tt.cancelled {
 				cancel()
 			}
+			src.onDone = cancel // the shutdown signal arrives after the record
 
 			c := NewConsumer(src, ingest, log, WithBackoff(backoff))
 			var sleeps []time.Duration
@@ -273,12 +294,22 @@ func TestConsumerHandle(t *testing.T) {
 			if tt.wantJournal != nil {
 				assert.Equal(t, tt.wantJournal, j.steps)
 			}
+			if tt.wantNoSteps {
+				assert.Empty(t, j.steps)
+			}
 			assert.Equal(t, tt.wantStats, c.Stats())
 			for _, want := range tt.wantLogHas {
 				assert.Contains(t, log.text(), want)
 			}
 			for _, lacks := range tt.wantLogLacks {
 				assert.NotContains(t, log.text(), lacks)
+			}
+			// The conversation id of the record never reaches a log or a returned error.
+			assert.NotContains(t, log.text(), "conv_a")
+			for _, handled := range src.handleError {
+				if handled != nil {
+					assert.NotContains(t, handled.Error(), "conv_a")
+				}
 			}
 		})
 	}
@@ -288,10 +319,18 @@ func TestConsumerRun(t *testing.T) {
 	tests := []struct {
 		name       string
 		consumeErr error
+		stopped    bool // the shutdown signal arrived before the source ended
+		lateStop   bool // the signal reaches ctx a moment after the source ended
 		wantErr    string
 	}{
-		{name: "sourceEndsCleanly"},
-		{name: "sourceFails", consumeErr: errors.New("broker down"), wantErr: "consume broker down"},
+		{name: "sourceEndsAfterTheShutdownSignal", stopped: true},
+		{name: "sourceFails", consumeErr: errors.New("broker down"), wantErr: "consume: broker down"},
+		// The library ends its loop quietly on a fatal broker error. Without a
+		// shutdown signal that is a failure, so the process exits non-zero.
+		// The library and the process's own signal handler get the same signal, and
+		// either can be seen first. A short grace tells that from a fatal error.
+		{name: "sourceEndsJustBeforeTheContextIsCancelled", lateStop: true},
+		{name: "sourceEndsWithoutTheShutdownSignal", wantErr: "consume: kafka source stopped without a shutdown signal"},
 	}
 
 	for _, tt := range tests {
@@ -304,7 +343,21 @@ func TestConsumerRun(t *testing.T) {
 			ingest := mocks.NewProjection(t)
 			ingest.On("Handle", mock.Anything, mock.Anything).Return(domain.ApplyResult{Applied: true, Projected: true}, nil).Once()
 
-			err := NewConsumer(src, ingest, log).Run(context.Background())
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tt.stopped {
+				src.onDone = cancel
+			}
+			if tt.lateStop {
+				src.onDone = func() { time.AfterFunc(20*time.Millisecond, cancel) }
+			}
+
+			grace := 10 * time.Millisecond
+			if tt.lateStop {
+				grace = 2 * time.Second
+			}
+
+			err := NewConsumer(src, ingest, log, WithShutdownGrace(grace)).Run(ctx)
 
 			if tt.wantErr != "" {
 				require.Error(t, err)

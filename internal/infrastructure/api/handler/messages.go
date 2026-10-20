@@ -51,7 +51,7 @@ func toMessagesResponse(page domain.MessagePage) messagesResponse {
 	messages := make([]messageResponse, 0, len(page.Messages))
 	for _, m := range page.Messages {
 		messages = append(messages, messageResponse{
-			ID:       itoa(m.OutboxID),
+			ID:       itoa(int64(m.Sequence)),
 			Type:     m.Type,
 			Role:     string(m.Role),
 			AuthorID: m.AuthorID,

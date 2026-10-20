@@ -30,7 +30,7 @@ func longStream() []domain.InboxEvent {
 			name = "AgentMessageSent"
 		}
 		events = append(events, domain.InboxEvent{
-			OutboxID: int64(seq), ConversationID: "conv", Sequence: seq, EventName: name, EventVersion: 1,
+			ConversationID: "conv", Sequence: seq, EventName: name, EventVersion: 1,
 			Payload: json.RawMessage(payload), Metadata: json.RawMessage(`{}`), IDYapeAccount: "acc-1", Actor: "user",
 			OccurredAt: at.Add(time.Duration(seq) * time.Second), KafkaTopic: "t", KafkaPartition: int32(seq % 3), KafkaOffset: int64(seq),
 		})
