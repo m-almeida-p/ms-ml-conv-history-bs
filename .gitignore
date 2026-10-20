@@ -7,6 +7,11 @@
 coverage.out
 coverage
 
+# Local run scripts (scripts/run_*.sh): their logs and the consumer's pid file
+*.log
+*.pid
+scripts/logs/
+
 # Local settings: never commit
 .env
 .env.*

@@ -34,6 +34,22 @@ go run ./cmd/api          # serve on :3100
 go run ./cmd/consumer rebuild
 ```
 
+The same, detached, with logs and a start check, as in the agent repo (`scripts/`):
+
+```bash
+./scripts/run_api.sh                 # builds bin/api if stale, starts it in the background, waits for /health
+./scripts/run_consumer.sh            # the same for the consumer; waits for its "consuming ..." line
+./scripts/run_consumer.sh --replay   # consumer rebuild: recreate the chat messages from the inbox
+./scripts/stop_api.sh
+./scripts/stop_consumer.sh           # SIGTERM, so it logs its totals and commits its last offset
+```
+
+Both run scripts take `--rebuild` (force a build), `--foreground` and `--no-kill` (refuse to replace a
+running instance); `run_api.sh` also takes `--port`. They work from any directory, stop a previous
+instance first, and exit at once, with the log path, when the binary dies (a wrong config, an unreachable
+database). Logs go to `scripts/logs/` and the consumer's pid to `scripts/logs/consumer.pid`; both are
+gitignored. `check-conventions.sh` in the same folder is tracked.
+
 Needs the local cluster (`../cluster`: Postgres with `wal_level=logical`, Kafka, Kafka Connect)
 and the connector registered from `../ms-ml-genai-agents-bs/local/debezium/register.sh`.
 `local/README.md` has the end-to-end steps.
@@ -148,7 +164,7 @@ internal/infrastructure/
 internal/testsupport/           test helpers: throwaway Postgres, concurrent/ (executors)
 it/history/                     integration and pipeline tests
 local/                          pipeline README and verify.sh
-scripts/check-conventions.sh    rules the linter cannot express
+scripts/                        run_*/stop_* for both binaries, check-conventions.sh (rules the linter cannot express)
 docs/                           design.md and the OpenAPI spec
 testdata/                       a captured Debezium record
 docs/design.md                  design notes
