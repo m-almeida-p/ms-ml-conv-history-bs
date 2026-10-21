@@ -20,6 +20,7 @@ type fact struct {
 	flow    string // "" is NULL
 	ref     string // confirmation_ref of a payment fact
 	outcome string // decision of a ConfirmationResolved
+	bare    bool   // a ConfirmationResolved whose payload has no decision
 	ago     time.Duration
 }
 
@@ -105,6 +106,70 @@ func TestFlowSegments(t *testing.T) {
 			},
 			want: []run{{1, "p2p", 1, 4, 4, "rejected"}},
 		},
+		{
+			name:  "aConversationOfOnlyItsStartIsOneRunOutsideAnyFlow",
+			facts: []fact{{name: "ConversationStarted"}},
+			want:  []run{{1, "", 1, 1, 1, "none"}},
+		},
+		{
+			name:  "aUserMessageWithNoFactAfterItKeepsTheFlowItWasWrittenIn",
+			facts: []fact{user(""), agent("p2p"), user("p2p")},
+			want:  []run{{1, "p2p", 1, 3, 3, "none"}},
+		},
+		{
+			name:  "aLastMessageOutsideAFlowAfterTheFlowIsItsOwnRun",
+			facts: []fact{user(""), agent("p2p"), user("")},
+			want:  []run{{1, "p2p", 1, 2, 2, "none"}, {2, "", 3, 3, 1, "none"}},
+		},
+		{
+			name: "theLastResolutionOfARunDecidesItsOutcome",
+			facts: []fact{
+				user(""), agent("p2p"), request("a"), resolved("a", "rejected"), resolved("a", "approved"),
+			},
+			want: []run{{1, "p2p", 1, 5, 5, "approved"}},
+		},
+		{
+			name: "aResolutionWithoutADecisionIsNotAnOutcome",
+			facts: []fact{
+				user(""), agent("p2p"), request("a"), {name: "ConfirmationResolved", flow: "p2p", ref: "a", bare: true},
+			},
+			want: []run{{1, "p2p", 1, 4, 4, "open"}},
+		},
+		{
+			name:  "consecutiveUserMessagesTakeTheFlowOfTheFactThatHandledThem",
+			facts: []fact{user(""), user(""), agent("p2p"), user("p2p")},
+			want:  []run{{1, "p2p", 1, 4, 4, "none"}},
+		},
+		{
+			name:  "aFailedTurnBetweenAMessageAndItsHandlerDoesNotSplitTheRun",
+			facts: []fact{user(""), {name: "AgentResponseFailed"}, agent("p2p")},
+			want:  []run{{1, "p2p", 1, 3, 3, "none"}},
+		},
+		{
+			name:  "theCloseOfAConversationJoinsTheRunBeforeIt",
+			facts: []fact{user(""), agent("p2p"), {name: "ConversationClosed"}},
+			want:  []run{{1, "p2p", 1, 3, 3, "none"}},
+		},
+		{
+			name:  "messagesAloneAreCutByTheFlowTheyWereWrittenIn",
+			facts: []fact{user("p2p"), user("")},
+			want:  []run{{1, "p2p", 1, 1, 1, "none"}, {2, "", 2, 2, 1, "none"}},
+		},
+		{
+			name: "aDecisionIsReportedAsTheAgentWroteIt",
+			facts: []fact{
+				user(""), agent("p2p"), request("a"), resolved("a", "APPROVED"),
+			},
+			want: []run{{1, "p2p", 1, 4, 4, "APPROVED"}},
+		},
+		{
+			name: "aGuardrailReplyAtTheEdgeOfAFlowJoinsTheRunBeforeIt",
+			facts: []fact{
+				user(""), agent("p2p"), request("a"), resolved("a", "approved"),
+				user("p2p"), {name: "UserMessageBlocked", flow: "p2p"}, {name: "GuardrailResponseSent"},
+			},
+			want: []run{{1, "p2p", 1, 4, 4, "approved"}, {2, "p2p", 5, 7, 3, "none"}},
+		},
 	}
 
 	for _, tt := range tests {
@@ -137,6 +202,141 @@ func TestFlowSegments(t *testing.T) {
 		assert.Equal(t, "open", runsOf(t, pool, "conv_recent")[0].Outcome, "inside the approval's ten minutes")
 		assert.Equal(t, "expired", runsOf(t, pool, "conv_old")[0].Outcome, "no resolution after the approval's ten minutes")
 	})
+}
+
+// TestFlowSegmentsReadTheCardFromThePaymentFacts: the card reference is the first one
+// the run carries; only a ConfirmationRequested makes a run "offer a card", while a
+// challenge or a failed notice carries the reference without an outcome.
+func TestFlowSegmentsReadTheCardFromThePaymentFacts(t *testing.T) {
+	refOf := func(t *testing.T, pool *pgxpool.Pool, conversation string) (ref *string, runs int) {
+		t.Helper()
+
+		rows, err := pool.Query(context.Background(),
+			`SELECT confirmation_ref FROM conversation_flow_segments WHERE conversation_id = $1 ORDER BY run`, conversation)
+		require.NoError(t, err)
+		defer rows.Close()
+
+		for rows.Next() {
+			require.NoError(t, rows.Scan(&ref))
+			runs++
+		}
+		require.NoError(t, rows.Err())
+
+		return ref, runs
+	}
+	card := func(name, ref string) fact { return fact{name: name, flow: "p2p", ref: ref} }
+
+	tests := []struct {
+		name        string
+		facts       []fact
+		wantRef     string
+		wantOutcome string
+	}{
+		{"twoCardsInARunReportTheFirst", []fact{user(""), agentFact("p2p"), card("ConfirmationRequested", "first"), card("ConfirmationRequested", "second")}, "first", "open"},
+		{"aChallengeAloneIsNotACard", []fact{user(""), agentFact("p2p"), card("PaymentChallengeIssued", "c1")}, "c1", "none"},
+		{"aFailedNoticeAloneIsNotACard", []fact{user(""), agentFact("p2p"), card("AgentNotificationFailed", "c1")}, "c1", "none"},
+		{"aRunWithoutPaymentFactsHasNoReference", []fact{user(""), agentFact("p2p")}, "", "none"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pool := newPool(t)
+			migrateUp(t, pool)
+			insertFacts(t, pool, "conv_a", tt.facts)
+
+			ref, runs := refOf(t, pool, "conv_a")
+			require.Equal(t, 1, runs)
+			if tt.wantRef == "" {
+				assert.Nil(t, ref)
+			} else {
+				require.NotNil(t, ref)
+				assert.Equal(t, tt.wantRef, *ref)
+			}
+			assert.Equal(t, tt.wantOutcome, runsOf(t, pool, "conv_a")[0].Outcome)
+		})
+	}
+}
+
+// TestFlowSegmentsFollowTheSequenceNotThePosition: the inbox of a conversation can
+// have holes (a skipped malformed event); the runs report the sequences it holds.
+func TestFlowSegmentsFollowTheSequenceNotThePosition(t *testing.T) {
+	pool := newPool(t)
+	migrateUp(t, pool)
+
+	insertFacts(t, pool, "conv_a", []fact{user(""), agentFact("p2p"), user("p2p"), agentFact(""), user("")})
+	_, err := pool.Exec(context.Background(),
+		`UPDATE conversation_inbox SET sequence = sequence * 10, kafka_offset = kafka_offset + 1000 WHERE conversation_id = 'conv_a'`)
+	require.NoError(t, err)
+
+	assert.Equal(t, []run{
+		{1, "p2p", 10, 20, 2, "none"},
+		{2, "", 30, 50, 3, "none"}, // 30 was written inside p2p and handled by the dispatcher
+	}, runsOf(t, pool, "conv_a"))
+}
+
+// TestFlowSegmentsAcrossConversations: reading several conversations in one query
+// gives each the runs it has alone, and a conversation that does not exist has none.
+func TestFlowSegmentsAcrossConversations(t *testing.T) {
+	pool := newPool(t)
+	migrateUp(t, pool)
+
+	insertFacts(t, pool, "conv_a", []fact{user(""), agentFact("p2p"), {name: "ConfirmationRequested", flow: "p2p", ref: "a"}, user("p2p"), user("")})
+	insertFacts(t, pool, "conv_b", []fact{user(""), agentFact("bill_payment"), user("bill_payment")})
+	insertFacts(t, pool, "conv_c", []fact{user("")})
+
+	t.Run("anUnknownConversationHasNoRuns", func(t *testing.T) {
+		assert.Empty(t, runsOf(t, pool, "conv_missing"))
+	})
+
+	t.Run("severalConversationsInOneQueryAreEachCutOnTheirOwn", func(t *testing.T) {
+		rows, err := pool.Query(context.Background(), `
+			SELECT conversation_id, run, coalesce(flow, ''), from_sequence, to_sequence, events, outcome
+			FROM conversation_flow_segments
+			WHERE conversation_id = ANY (ARRAY(SELECT unnest($1::text[])))
+			ORDER BY conversation_id, run`, []string{"conv_a", "conv_b", "conv_missing"})
+		require.NoError(t, err)
+		defer rows.Close()
+
+		got := map[string][]run{}
+		for rows.Next() {
+			var id string
+			var r run
+			require.NoError(t, rows.Scan(&id, &r.Run, &r.Flow, &r.From, &r.To, &r.Events, &r.Outcome))
+			got[id] = append(got[id], r)
+		}
+		require.NoError(t, rows.Err())
+
+		require.Len(t, got, 2, "a conversation outside the list or the table adds nothing")
+		assert.Equal(t, runsOf(t, pool, "conv_a"), got["conv_a"])
+		assert.Equal(t, runsOf(t, pool, "conv_b"), got["conv_b"])
+	})
+}
+
+// TestFlowSegmentsApprovalLifetime: a card left unresolved is open for ten minutes
+// after its last fact and expired afterwards.
+func TestFlowSegmentsApprovalLifetime(t *testing.T) {
+	for name, tt := range map[string]struct {
+		ago  time.Duration
+		want string
+	}{
+		"justNow":          {0, "open"},
+		"nineMinutesAgo":   {9 * time.Minute, "open"},
+		"elevenMinutesAgo": {11 * time.Minute, "expired"},
+		"aDayAgo":          {24 * time.Hour, "expired"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			pool := newPool(t)
+			migrateUp(t, pool)
+
+			insertFacts(t, pool, "conv_a", []fact{
+				{name: "UserMessageSent", ago: tt.ago},
+				{name: "AgentMessageSent", flow: "p2p", ago: tt.ago},
+				{name: "ConfirmationRequested", flow: "p2p", ref: "a", ago: tt.ago},
+			})
+
+			assert.Equal(t, tt.want, runsOf(t, pool, "conv_a")[0].Outcome)
+		})
+	}
 }
 
 // TestFlowSegmentsReadOnlyTheConversationAsked: a query for one conversation reads
@@ -192,7 +392,7 @@ func insertFacts(t *testing.T, pool *pgxpool.Pool, conversation string, facts []
 	for i, f := range facts {
 		payload := "{}"
 		switch {
-		case f.name == "ConfirmationResolved":
+		case f.name == "ConfirmationResolved" && !f.bare:
 			payload = fmt.Sprintf(`{"confirmation_ref": %q, "decision": %q}`, f.ref, f.outcome)
 		case f.ref != "":
 			payload = fmt.Sprintf(`{"confirmation_ref": %q}`, f.ref)

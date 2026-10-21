@@ -242,6 +242,7 @@ func TestApply(t *testing.T) {
 		tests := []struct {
 			name         string
 			change       func(e *domain.InboxEvent)
+			withFlow     string // the flow of the stored event
 			wantRejected bool
 		}{
 			{name: "theSameEvent", change: func(*domain.InboxEvent) {}},
@@ -254,6 +255,9 @@ func TestApply(t *testing.T) {
 			{name: "noAccountWhereThereWasOne", change: func(e *domain.InboxEvent) { e.IDYapeAccount = "" }, wantRejected: true},
 			{name: "aFlowWhereThereWasNone", change: func(e *domain.InboxEvent) { e.Flow = "p2p" }, wantRejected: true},
 			{name: "anotherActor", change: func(e *domain.InboxEvent) { e.Actor = "agent" }, wantRejected: true},
+			{name: "aFlowRemovedAfterwards", change: func(e *domain.InboxEvent) { e.Flow = "" }, withFlow: "p2p", wantRejected: true},
+			{name: "anotherFlow", change: func(e *domain.InboxEvent) { e.Flow = "bill_payment" }, withFlow: "p2p", wantRejected: true},
+			{name: "theSameFlow", change: func(*domain.InboxEvent) {}, withFlow: "p2p"},
 			{name: "aCorrelationIDWhereThereWasNone", change: func(e *domain.InboxEvent) { e.CorrelationID = "corr-1" }, wantRejected: true},
 		}
 
@@ -261,6 +265,7 @@ func TestApply(t *testing.T) {
 			t.Run(tt.name, func(t *testing.T) {
 				reset(t)
 				first := pick(events, 2)[0]
+				first.Flow = tt.withFlow
 				applyAll(t, []domain.InboxEvent{first})
 				inboxBefore, messagesBefore := digest(t, pool)
 
