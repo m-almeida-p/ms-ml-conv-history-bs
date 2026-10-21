@@ -24,7 +24,7 @@ const (
 	pgPassword = "test_password"
 )
 
-// Postgres is a throwaway Postgres 16. It keeps one host port and its data, so
+// Postgres is a throwaway Postgres 18. It keeps one host port and its data, so
 // it can be stopped and started again under the same DSN, which is how a test
 // simulates a database outage.
 type Postgres struct {
@@ -33,7 +33,7 @@ type Postgres struct {
 	id  string
 }
 
-// StartPostgres starts a throwaway Postgres 16 on a host port of its own. The test
+// StartPostgres starts a throwaway Postgres 18 on a host port of its own. The test
 // is skipped when Docker is not reachable, and the container is removed on cleanup.
 func StartPostgres(t *testing.T) *Postgres {
 	t.Helper()
@@ -49,7 +49,7 @@ func StartPostgres(t *testing.T) *Postgres {
 
 	started, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
-			Image:        "postgres:16-alpine",
+			Image:        "postgres:18-alpine",
 			ExposedPorts: []string{"5432/tcp"},
 			Env: map[string]string{
 				"POSTGRES_DB":       pgDatabase,
