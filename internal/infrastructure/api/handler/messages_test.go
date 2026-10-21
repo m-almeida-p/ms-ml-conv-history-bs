@@ -23,14 +23,14 @@ func TestMessages(t *testing.T) {
 	}
 	agent := domain.Message{
 		ConversationID: "conv_v1_a", Sequence: 3, Role: domain.RoleMaker, AuthorID: "ms-ml-genai-agent-bs", Type: "text",
-		Text: "¿A quién?", Truncated: true, SourceEvent: "AgentMessageSent", ReceivedAt: received,
+		Text: "¿A quién?", Truncated: true, SourceEvent: "AgentMessageSent", Flow: "p2p", ReceivedAt: received,
 	}
 	storeDown := errors.New("connection reset: password=hunter2")
 
 	userJSON := `{"_id":"2","type":"text","role":"appUser","authorId":"acc-1","text":"quiero yapear","received":1792505243.792,
 		"source":{"type":"api"},"metadata":{"sequence":2,"sourceEvent":"UserMessageSent","truncated":false}}`
 	agentJSON := `{"_id":"3","type":"text","role":"appMaker","authorId":"ms-ml-genai-agent-bs","text":"¿A quién?","received":1792505243.792,
-		"source":{"type":"api"},"metadata":{"sequence":3,"sourceEvent":"AgentMessageSent","truncated":true}}`
+		"source":{"type":"api"},"metadata":{"sequence":3,"sourceEvent":"AgentMessageSent","truncated":true,"flow":"p2p"}}`
 
 	tests := []struct {
 		name       string

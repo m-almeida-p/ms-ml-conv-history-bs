@@ -134,12 +134,13 @@ func scanMessages(rows pgx.Rows) ([]domain.Message, error) {
 			m       domain.Message
 			role    string
 			account *string
+			flow    *string
 		)
 		if err := rows.Scan(&m.ConversationID, &m.Sequence, &role, &m.AuthorID, &m.Type, &m.Text,
-			&m.Truncated, &m.SourceEvent, &account, &m.ReceivedAt); err != nil {
+			&m.Truncated, &m.SourceEvent, &account, &flow, &m.ReceivedAt); err != nil {
 			return nil, dbError("scan message", err)
 		}
-		m.Role, m.IDYapeAccount = domain.Role(role), value(account)
+		m.Role, m.IDYapeAccount, m.Flow = domain.Role(role), value(account), value(flow)
 		messages = append(messages, m)
 	}
 	if err := rows.Err(); err != nil {

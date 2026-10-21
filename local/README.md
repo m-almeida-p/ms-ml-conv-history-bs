@@ -4,7 +4,7 @@ The cluster (`../cluster`) provides Postgres, Kafka and Kafka Connect. The agent
 conversation events connector is registered from `../ms-ml-genai-agents-bs/local/debezium/register.sh`.
 
 ```bash
-# tables (testing repo, migrations/history/p2p)
+# tables (testing repo, migrations/history/conversation)
 make migrations/up
 
 # read the topic and build the history; stop with Ctrl-C (SIGTERM)
@@ -82,6 +82,6 @@ new ones at the same sequence. Delete whole, closed conversations only. To start
 history and the consumer group's offsets:
 
 ```bash
-(cd ../ml-genai-agents-bs-testing && make migrations/down SERVICE=history FLOW=p2p CONFIRM=yes && make migrations/up SERVICE=history)
+(cd ../ml-genai-agents-bs-testing && make migrations/down SERVICE=history FLOW=conversation CONFIRM=yes && make migrations/up SERVICE=history)
 docker exec yape-kafka kafka-consumer-groups --bootstrap-server localhost:29092 --group ms-ml-conv-history-bs --reset-offsets --to-earliest --topic yape.public.conversation_events --execute
 ```

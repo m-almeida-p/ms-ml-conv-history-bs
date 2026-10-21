@@ -97,6 +97,7 @@ func (s *Service) Project(event domain.InboxEvent) (*domain.Message, error) {
 		Text:           *text,
 		Truncated:      payload.Truncated,
 		SourceEvent:    event.EventName,
+		Flow:           event.Flow,
 		IDYapeAccount:  event.IDYapeAccount,
 		ReceivedAt:     event.OccurredAt,
 	}, nil

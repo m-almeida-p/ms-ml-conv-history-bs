@@ -66,6 +66,7 @@ func TestSchema(t *testing.T) {
 					"correlation_id":  {"text", true},
 					"id_yape_account": {"text", true},
 					"actor":           {"text", true},
+					"flow":            {"text", true},
 					"occurred_at":     {"timestamp with time zone", false},
 					"kafka_topic":     {"text", false},
 					"kafka_partition": {"integer", false},
@@ -86,6 +87,7 @@ func TestSchema(t *testing.T) {
 					"truncated":       {"boolean", false},
 					"source_event":    {"character varying", false},
 					"id_yape_account": {"text", true},
+					"flow":            {"text", true},
 					"received_at":     {"timestamp with time zone", false},
 				},
 			},
@@ -217,7 +219,7 @@ func TestSchema(t *testing.T) {
 
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
-				runMigration(t, pool, "000001_create_inbox_and_messages.down.sql")
+				migrateDown(t, pool)
 
 				assert.False(t, tableExists(t, pool, "conversation_inbox"))
 				assert.False(t, tableExists(t, pool, "conversation_messages"))

@@ -39,6 +39,18 @@ func TestProject(t *testing.T) {
 			},
 		},
 		{
+			name: "aMessageInsideAFlowCarriesIt",
+			event: func() domain.InboxEvent {
+				e := base("UserMessageSent", `{"text": "20 soles"}`)
+				e.Flow = "p2p"
+				return e
+			}(),
+			want: &domain.Message{
+				ConversationID: "conv_v1_a", Sequence: 2, Role: domain.RoleUser, AuthorID: "acc-1",
+				Type: "text", Text: "20 soles", SourceEvent: "UserMessageSent", IDYapeAccount: "acc-1", Flow: "p2p", ReceivedAt: occurredAt,
+			},
+		},
+		{
 			name:  "agentMessage",
 			event: base("AgentMessageSent", `{"text": "¿A quién?", "sequence": 3}`),
 			want: &domain.Message{

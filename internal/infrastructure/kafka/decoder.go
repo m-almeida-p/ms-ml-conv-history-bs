@@ -70,6 +70,7 @@ type row struct {
 	CorrelationID  *string         `json:"correlation_id"`
 	IDYapeAccount  *string         `json:"id_yape_account"`
 	Actor          *string         `json:"actor"`
+	Flow           *string         `json:"flow"`
 	OccurredAt     *string         `json:"occurred_at"`
 }
 
@@ -125,6 +126,7 @@ func Decode(record resource.Message) (*domain.InboxEvent, error) {
 		CorrelationID:  text(r.CorrelationID),
 		IDYapeAccount:  text(r.IDYapeAccount),
 		Actor:          text(r.Actor),
+		Flow:           text(r.Flow),
 		OccurredAt:     occurredAt.UTC(),
 		KafkaTopic:     record.Topic,
 		KafkaPartition: record.Partition,
@@ -194,6 +196,8 @@ func (r row) outOfRangeField() *problem {
 		return &problem{ReasonFieldRange, "conversation_id"}
 	case r.IDYapeAccount != nil && *r.IDYapeAccount != "" && !domain.ValidIdentifier(*r.IDYapeAccount):
 		return &problem{ReasonFieldRange, "id_yape_account"}
+	case r.Flow != nil && *r.Flow != "" && !domain.ValidFlow(*r.Flow):
+		return &problem{ReasonFieldRange, "flow"}
 	case utf8.RuneCountInString(*r.EventName) > maxNameLength:
 		return &problem{ReasonFieldRange, "event_name"}
 	}

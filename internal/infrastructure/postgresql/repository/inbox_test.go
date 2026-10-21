@@ -20,24 +20,24 @@ var _ repository.InboxRepository = (*Inbox)(nil)
 
 func TestApply(t *testing.T) {
 	occurredAt := time.Date(2026, 10, 20, 14, 13, 41, 0, time.UTC)
-	account, actor, correlation := "acc-1", "user", "c-1"
+	account, actor, correlation, flow := "acc-1", "user", "c-1", "p2p"
 
 	event := domain.InboxEvent{
 		ConversationID: "conv_v1_a", Sequence: 2, EventName: "UserMessageSent", EventVersion: 1,
 		Payload: json.RawMessage(`{"text": "hola"}`), Metadata: json.RawMessage(`{"actor": "user"}`),
-		CorrelationID: "c-1", IDYapeAccount: "acc-1", Actor: "user", OccurredAt: occurredAt,
+		CorrelationID: "c-1", IDYapeAccount: "acc-1", Actor: "user", Flow: "p2p", OccurredAt: occurredAt,
 		KafkaTopic: "yape.public.conversation_events", KafkaPartition: 1, KafkaOffset: 7,
 	}
 	message := &domain.Message{
 		ConversationID: "conv_v1_a", Sequence: 2, Role: domain.RoleUser, AuthorID: "acc-1",
-		Type: "text", Text: "hola", SourceEvent: "UserMessageSent", IDYapeAccount: "acc-1", ReceivedAt: occurredAt,
+		Type: "text", Text: "hola", SourceEvent: "UserMessageSent", IDYapeAccount: "acc-1", Flow: "p2p", ReceivedAt: occurredAt,
 	}
 
 	insertArgs := []any{
 		"conv_v1_a", 2, "UserMessageSent", 1, json.RawMessage(`{"text": "hola"}`), json.RawMessage(`{"actor": "user"}`),
-		&correlation, &account, &actor, occurredAt, "yape.public.conversation_events", int32(1), int64(7),
+		&correlation, &account, &actor, &flow, occurredAt, "yape.public.conversation_events", int32(1), int64(7),
 	}
-	upsertArgs := []any{"conv_v1_a", 2, "appUser", "acc-1", "text", "hola", false, "UserMessageSent", &account, occurredAt}
+	upsertArgs := []any{"conv_v1_a", 2, "appUser", "acc-1", "text", "hola", false, "UserMessageSent", &account, &flow, occurredAt}
 
 	dbDown := errors.New("connection reset")
 
@@ -75,7 +75,7 @@ func TestApply(t *testing.T) {
 			name: "absentMetadataCopiesAreStoredAsNull",
 			event: func() domain.InboxEvent {
 				e := event
-				e.CorrelationID, e.IDYapeAccount, e.Actor = "", "", ""
+				e.CorrelationID, e.IDYapeAccount, e.Actor, e.Flow = "", "", "", ""
 				return e
 			}(),
 			expect: func(m pgxmock.PgxPoolIface) {
@@ -83,7 +83,7 @@ func TestApply(t *testing.T) {
 				m.ExpectBegin()
 				m.ExpectExec("INSERT INTO conversation_inbox").
 					WithArgs("conv_v1_a", 2, "UserMessageSent", 1, json.RawMessage(`{"text": "hola"}`), json.RawMessage(`{"actor": "user"}`),
-						none, none, none, occurredAt, "yape.public.conversation_events", int32(1), int64(7)).
+						none, none, none, none, occurredAt, "yape.public.conversation_events", int32(1), int64(7)).
 					WillReturnResult(pgxmock.NewResult("INSERT", 1))
 				m.ExpectCommit()
 			},
@@ -96,7 +96,7 @@ func TestApply(t *testing.T) {
 			expect: func(m pgxmock.PgxPoolIface) {
 				m.ExpectBegin()
 				m.ExpectExec("INSERT INTO conversation_inbox").WithArgs(insertArgs...).WillReturnResult(pgxmock.NewResult("INSERT", 0))
-				m.ExpectQuery("FROM conversation_inbox").WithArgs("conv_v1_a", 2, "UserMessageSent", 1, json.RawMessage(`{"text": "hola"}`), json.RawMessage(`{"actor": "user"}`), &correlation, &account, &actor).WillReturnRows(pgxmock.NewRows([]string{"same"}).AddRow(true))
+				m.ExpectQuery("FROM conversation_inbox").WithArgs("conv_v1_a", 2, "UserMessageSent", 1, json.RawMessage(`{"text": "hola"}`), json.RawMessage(`{"actor": "user"}`), &correlation, &account, &actor, &flow).WillReturnRows(pgxmock.NewRows([]string{"same"}).AddRow(true))
 				m.ExpectRollback()
 			},
 			want: domain.ApplyResult{},
@@ -242,10 +242,10 @@ func TestApplyWriteErrors(t *testing.T) {
 
 			mock.ExpectBegin()
 			if tt.failOn == "inbox" {
-				mock.ExpectExec("INSERT INTO conversation_inbox").WithArgs(anyArgs(13)...).WillReturnError(tt.err)
+				mock.ExpectExec("INSERT INTO conversation_inbox").WithArgs(anyArgs(14)...).WillReturnError(tt.err)
 			} else {
-				mock.ExpectExec("INSERT INTO conversation_inbox").WithArgs(anyArgs(13)...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
-				mock.ExpectExec("INSERT INTO conversation_messages").WithArgs(anyArgs(10)...).WillReturnError(tt.err)
+				mock.ExpectExec("INSERT INTO conversation_inbox").WithArgs(anyArgs(14)...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
+				mock.ExpectExec("INSERT INTO conversation_messages").WithArgs(anyArgs(11)...).WillReturnError(tt.err)
 			}
 			mock.ExpectRollback()
 
@@ -264,9 +264,9 @@ func TestApplyOfARepeatedEventChecksItIsTheSameEvent(t *testing.T) {
 	dbDown := errors.New("connection reset")
 	event := domain.InboxEvent{
 		ConversationID: "conv", Sequence: 3, EventName: "UserMessageSent", EventVersion: 1, Payload: json.RawMessage(`{}`), Metadata: json.RawMessage(`{}`),
-		CorrelationID: "c-1", IDYapeAccount: "acc-1", Actor: "user", KafkaTopic: "t", KafkaPartition: 2, KafkaOffset: 9,
+		CorrelationID: "c-1", IDYapeAccount: "acc-1", Actor: "user", Flow: "p2p", KafkaTopic: "t", KafkaPartition: 2, KafkaOffset: 9,
 	}
-	correlation, account, actor := "c-1", "acc-1", "user"
+	correlation, account, actor, flow := "c-1", "acc-1", "user", "p2p"
 	sameRows := func(same bool) func() *pgxmock.Rows {
 		return func() *pgxmock.Rows { return pgxmock.NewRows([]string{"same"}).AddRow(same) }
 	}
@@ -290,8 +290,8 @@ func TestApplyOfARepeatedEventChecksItIsTheSameEvent(t *testing.T) {
 			require.NoError(t, err)
 			defer mock.Close()
 			mock.ExpectBegin()
-			mock.ExpectExec("INSERT INTO conversation_inbox").WithArgs(anyArgs(13)...).WillReturnResult(pgxmock.NewResult("INSERT", 0))
-			query := mock.ExpectQuery("FROM conversation_inbox").WithArgs("conv", 3, "UserMessageSent", 1, json.RawMessage(`{}`), json.RawMessage(`{}`), &correlation, &account, &actor)
+			mock.ExpectExec("INSERT INTO conversation_inbox").WithArgs(anyArgs(14)...).WillReturnResult(pgxmock.NewResult("INSERT", 0))
+			query := mock.ExpectQuery("FROM conversation_inbox").WithArgs("conv", 3, "UserMessageSent", 1, json.RawMessage(`{}`), json.RawMessage(`{}`), &correlation, &account, &actor, &flow)
 			if tt.queryErr != nil {
 				query.WillReturnError(tt.queryErr)
 			} else {

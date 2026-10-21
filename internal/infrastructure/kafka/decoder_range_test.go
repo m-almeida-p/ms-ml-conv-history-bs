@@ -104,3 +104,49 @@ func TestDecodeChecksTheAccountIdentifier(t *testing.T) {
 		})
 	}
 }
+
+// The flow is optional; when present it must be a flow name the store can hold.
+func TestDecodeChecksTheFlow(t *testing.T) {
+	body := func(flow string) string {
+		return `{"conversation_id":"c","sequence":1,"event_name":"E","event_version":1,"payload":"{}","metadata":"{}",` +
+			`"flow":` + flow + `,"occurred_at":"2026-10-20T14:07:23Z"}`
+	}
+
+	tests := []struct {
+		name      string
+		flow      string
+		want      string
+		wantField string
+	}{
+		{name: "p2p", flow: `"p2p"`, want: "p2p"},
+		{name: "billPayment", flow: `"bill_payment"`, want: "bill_payment"},
+		{name: "absentIsAllowed", flow: `null`},
+		{name: "emptyIsAllowed", flow: `""`},
+		{name: "upperCase", flow: `"P2P"`, wantField: "flow"},
+		{name: "withASpace", flow: `"bill payment"`, wantField: "flow"},
+		{name: "oneTooLong", flow: `"a` + strings.Repeat("b", 64) + `"`, wantField: "flow"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := Decode(record(body(tt.flow)))
+
+			if tt.wantField == "" {
+				require.NoError(t, err)
+				assert.Equal(t, tt.want, got.Flow)
+				return
+			}
+			var decodeErr *DecodeError
+			require.ErrorAs(t, err, &decodeErr)
+			assert.Equal(t, ReasonFieldRange, decodeErr.Reason)
+			assert.Equal(t, tt.wantField, decodeErr.Field)
+		})
+	}
+
+	t.Run("a record without the field has no flow", func(t *testing.T) {
+		got, err := Decode(record(validBody))
+
+		require.NoError(t, err)
+		assert.Empty(t, got.Flow)
+	})
+}

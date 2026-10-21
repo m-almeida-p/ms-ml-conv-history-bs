@@ -41,6 +41,32 @@ func TestInboxEventRefCarriesNoContent(t *testing.T) {
 	}
 }
 
+func TestValidFlow(t *testing.T) {
+	tests := []struct {
+		name string
+		flow string
+		want bool
+	}{
+		{name: "p2p", flow: "p2p", want: true},
+		{name: "billPayment", flow: "bill_payment", want: true},
+		{name: "largestLength", flow: "a" + strings.Repeat("b", 63), want: true},
+		{name: "empty", flow: ""},
+		{name: "oneTooLong", flow: "a" + strings.Repeat("b", 64)},
+		{name: "startsWithADigit", flow: "2fa"},
+		{name: "upperCase", flow: "P2P"},
+		{name: "hyphen", flow: "bill-payment"},
+		{name: "space", flow: "bill payment"},
+		{name: "newline", flow: "p2p\n"},
+		{name: "nonASCII", flow: "pagó"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, ValidFlow(tt.flow))
+		})
+	}
+}
+
 func TestValidIdentifier(t *testing.T) {
 	tests := []struct {
 		name string

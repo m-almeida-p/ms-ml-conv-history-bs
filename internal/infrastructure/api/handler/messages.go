@@ -58,7 +58,7 @@ func toMessagesResponse(page domain.MessagePage) messagesResponse {
 			Text:     m.Text,
 			Received: unixSeconds(m.ReceivedAt),
 			Source:   sourceResponse{Type: "api"},
-			Metadata: messageMetadata{Sequence: m.Sequence, SourceEvent: m.SourceEvent, Truncated: m.Truncated},
+			Metadata: messageMetadata{Sequence: m.Sequence, SourceEvent: m.SourceEvent, Truncated: m.Truncated, Flow: m.Flow},
 		})
 	}
 

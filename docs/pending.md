@@ -32,7 +32,7 @@ only: no Postgres, no connector.
 | # | Item | Detail | Status |
 |---|------|--------|--------|
 | 2.1 | Authentication on the API | There is none, so the service must not be deployed. Decide the model (the agent validates a JWT with `idYapeAccount`) | Decision |
-| 2.2 | Migrations | They live in `ml-genai-agents-bs-testing/migrations/history/p2p/`. Deployed environments run a golang-migrate project (`repos/migrations` for the agent's tables). Confirm where the history's migrations go | Decision |
+| 2.2 | Migrations | They live in `ml-genai-agents-bs-testing/migrations/history/conversation/`. Deployed environments run a golang-migrate project (`repos/migrations` for the agent's tables). Confirm where the history's migrations go | Decision |
 | 2.3 | Database | The PoC shares the `postgres` database with the agent. Decide whether production gives the service its own database | Decision |
 | 2.4 | Build and deploy | No Dockerfile or manifests. `lib-go-kafkalizer` wraps `confluent-kafka-go`, so the image needs cgo | Not started |
 | 2.5 | Kafka credentials | `KAFKA_CLIENT_BROKERS`, `KAFKA_CLIENT_SASL_KEY` and `KAFKA_CLIENT_SASL_SECRET` come from the environment. Wire them from the secret store | Not started |
@@ -45,7 +45,8 @@ only: no Postgres, no connector.
 
 | # | Item | Detail | Status |
 |---|------|--------|--------|
-| 3.1 | Unpushed work | Four repos hold commits that are not pushed: `ms-ml-genai-agents-bs` (the single write to `conversation_events`, `local/debezium/`), `ml-genai-agents-bs-testing` (migrations by service and flow, `migrate.sh`, the idempotency check), `ms-ml-conv-history-bs` and `cluster` (Kafka Connect, `wal_level=logical`; no remote) | Not started |
+| 3.1 | Other flows' facts | Bill payment writes conversation facts through its agents (stamped `bill_payment`) but records no payment facts of its own. When it does, it builds its own `FlowRecorder` with `WithFlowName(flows.BillPayment)` and, if it needs tables, a folder and table names carrying the flow | Not started |
+| 3.2 | Repos without a remote | `ms-ml-conv-history-bs`, `ml-genai-agents-bs-testing` and `cluster` (Kafka Connect, `wal_level=logical`) exist only on the laptop; `ms-ml-genai-agents-bs` is pushed. Where they live is a decision for the squad | Decision |
 
 ## 4. Limits of the tests
 

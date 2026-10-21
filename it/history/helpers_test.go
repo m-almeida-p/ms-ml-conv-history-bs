@@ -5,6 +5,8 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -15,7 +17,7 @@ import (
 
 // defaultMigrationsDir is where the testing repo keeps this service's migrations,
 // as a sibling checkout. HISTORY_MIGRATIONS_DIR points elsewhere.
-const defaultMigrationsDir = "../../../ml-genai-agents-bs-testing/migrations/history/p2p"
+const defaultMigrationsDir = "../../../ml-genai-agents-bs-testing/migrations/history/conversation"
 
 func migrationsDir(t *testing.T) string {
 	t.Helper()
@@ -67,9 +69,37 @@ func runMigration(t *testing.T, pool *pgxpool.Pool, file string) {
 	require.NoError(t, err, file)
 }
 
-// migrateUp creates the inbox and the messages tables.
+// migrateUp applies every up migration of the folder, in order: the inbox and the
+// messages tables, then the views over them.
 func migrateUp(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 
-	runMigration(t, pool, "000001_create_inbox_and_messages.up.sql")
+	for _, file := range migrationFiles(t, ".up.sql", false) {
+		runMigration(t, pool, file)
+	}
+}
+
+// migrateDown applies every down migration, last first.
+func migrateDown(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+
+	for _, file := range migrationFiles(t, ".down.sql", true) {
+		runMigration(t, pool, file)
+	}
+}
+
+func migrationFiles(t *testing.T, suffix string, reverse bool) []string {
+	t.Helper()
+
+	files, err := filepath.Glob(filepath.Join(migrationsDir(t), "*"+suffix))
+	require.NoError(t, err)
+	sort.Strings(files)
+	if reverse {
+		slices.Reverse(files)
+	}
+	for i, f := range files {
+		files[i] = filepath.Base(f)
+	}
+
+	return files
 }

@@ -14,7 +14,7 @@ import (
 )
 
 var messageColumns = []string{
-	"conversation_id", "sequence", "role", "author_id", "type", "text", "truncated", "source_event", "id_yape_account", "received_at",
+	"conversation_id", "sequence", "role", "author_id", "type", "text", "truncated", "source_event", "id_yape_account", "flow", "received_at",
 }
 
 var at = time.Date(2026, 10, 20, 14, 0, 0, 0, time.UTC)
@@ -22,9 +22,9 @@ var at = time.Date(2026, 10, 20, 14, 0, 0, 0, time.UTC)
 // msgRows builds the rows a query returns, in the order given.
 func msgRows(sequences ...int) *pgxmock.Rows {
 	rows := pgxmock.NewRows(messageColumns)
-	account := "acc-1"
+	account, flow := "acc-1", "p2p"
 	for _, seq := range sequences {
-		rows.AddRow("conv", seq, "appUser", "acc-1", "text", "m", false, "UserMessageSent", &account, at.Add(time.Duration(seq)*time.Second))
+		rows.AddRow("conv", seq, "appUser", "acc-1", "text", "m", false, "UserMessageSent", &account, &flow, at.Add(time.Duration(seq)*time.Second))
 	}
 
 	return rows
@@ -205,7 +205,7 @@ func TestListMessages(t *testing.T) {
 			name:  "scanFails",
 			query: domain.PageQuery{ConversationID: "conv", Direction: domain.DirectionNewest},
 			expect: func(m pgxmock.PgxPoolIface) {
-				rows := pgxmock.NewRows(messageColumns).AddRow("conv", "not a number", "appUser", "a", "text", "m", false, "E", nil, at)
+				rows := pgxmock.NewRows(messageColumns).AddRow("conv", "not a number", "appUser", "a", "text", "m", false, "E", nil, nil, at)
 				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 101).WillReturnRows(rows)
 			},
 			wantErrText: "scan message",
@@ -271,7 +271,7 @@ func TestListMessagesFillsEveryField(t *testing.T) {
 
 	var none *string
 	rows := pgxmock.NewRows(messageColumns).
-		AddRow("conv", 4, "appMaker", "ms-ml-genai-agent-bs", "text", "hola", true, "AgentMessageSent", none, at)
+		AddRow("conv", 4, "appMaker", "ms-ml-genai-agent-bs", "text", "hola", true, "AgentMessageSent", none, none, at)
 	mock.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 101).WillReturnRows(rows)
 
 	page, err := NewMessages(mock).ListMessages(context.Background(), domain.PageQuery{ConversationID: "conv", Direction: domain.DirectionNewest})

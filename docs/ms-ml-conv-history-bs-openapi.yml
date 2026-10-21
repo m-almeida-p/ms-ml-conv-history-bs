@@ -74,6 +74,13 @@ definitions:
     type: object
   handler.messageMetadata:
     properties:
+      flow:
+        description: Flow is the flow the message took place in, such as p2p. It is
+          absent outside any flow. A message the user writes carries the flow they
+          were in when they wrote it, so the message that opens a flow has none and
+          the one that leaves it carries the flow it was in.
+        example: p2p
+        type: string
       sequence:
         description: Sequence is the position of the message's event in the conversation.
           Gaps are normal.

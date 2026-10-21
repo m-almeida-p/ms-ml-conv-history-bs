@@ -1,7 +1,7 @@
 # Design
 
-How the events of the agent's `conversation_events` table become a chat history. Scope: the P2P flow; the same
-tables serve other flows.
+How the events of the agent's `conversation_events` table become a chat history. Scope: the conversation log of every flow;
+the P2P flow is the first to record facts of its own.
 
 ## Data flow
 
@@ -41,7 +41,7 @@ column that must not leave the database is excluded in the connector.
 | Part | Format |
 |------|--------|
 | Key | 5-byte Schema Registry header + `{"conversation_id": "<id>"}` (`message.key.columns`), so a conversation stays on one partition, in order |
-| Value | 5-byte header + the row as JSON: `conversation_id`, `sequence`, `event_name`, `event_version`, `payload`, `metadata`, `correlation_id`, `id_yape_account`, `actor`, `occurred_at` |
+| Value | 5-byte header + the row as JSON: `conversation_id`, `sequence`, `event_name`, `event_version`, `payload`, `metadata`, `correlation_id`, `id_yape_account`, `actor`, `flow`, `occurred_at` |
 | `payload`, `metadata` | JSON **strings** (JSONB arrives as text) |
 | `occurred_at` | RFC 3339, microseconds, `Z` |
 | Delete in the event store | not published (the delete and its tombstone are dropped); the consumer still skips a tombstone if one arrives |
@@ -84,7 +84,7 @@ handling is off, because that path publishes to a dead-letter engine this servic
 
 ## Schema
 
-The SQL lives in `ml-genai-agents-bs-testing/migrations/history/p2p/` and comments every column.
+The SQL lives in `ml-genai-agents-bs-testing/migrations/history/conversation/` and comments every column.
 
 ```mermaid
 erDiagram
@@ -98,6 +98,7 @@ erDiagram
         text correlation_id
         text id_yape_account
         text actor "user, agent or system"
+        text flow "p2p, bill_payment, ... or NULL"
         timestamptz occurred_at "conversation_events occurred_at"
         text kafka_topic
         int kafka_partition
@@ -115,6 +116,7 @@ erDiagram
         boolean truncated
         varchar source_event
         text id_yape_account
+        text flow "p2p, bill_payment, ... or NULL"
         timestamptz received_at
     }
     conversation_inbox ||..o| conversation_messages : "a chat event gives one message"
@@ -130,6 +132,61 @@ find those; the `invalid` counter and the log do.
 conversation's id were used again, its new events would meet the inbox's copies: different content is
 rejected and identical content is ignored. The BFF issues a new id per conversation, and the event
 store is cleaned of whole, closed conversations only.
+
+## Flows
+
+The tables are the conversation log, and every flow writes to it: P2P, bill payment, lending and the
+generalist all land in `conversation_events`, because one chat can cross several of them. So the names stay
+`conversation_*` and the migrations live in the `conversation` folders. A flow with tables of its own gets
+a folder and table names that carry the flow (`bill_payment_…`).
+
+What tells the flows apart is the `flow` column, a plain column of the event, next to `correlation_id`, `id_yape_account` and `actor`. It is the
+flow that was active when the fact arrived:
+
+| Fact | Flow |
+|------|------|
+| An agent's message or tool summary | the flow of that agent (`p2p_agent`, `p2p_workflow` and `p2p_turn_plan` are `p2p`; `bill_payment_agent` and its private agents are `bill_payment`) |
+| A payment fact (contact, card, OTP, resolution, failed notice) | the flow of the recorder that wrote it (`p2p`) |
+| A message the user writes, and a notice a service sends in their place (the BFF's, after a card) | the flow of the last agent fact stored in the conversation, which is the agent ADK sends the turn to: the flow they were in when they wrote it. The store reads it from the stream when it saves the fact, so it holds on any session; the notice arrives on the account's session, not the chat's |
+| The dispatcher's, generalist's and other specialists' messages; guardrail and failure facts | none |
+
+So the user message that opens a flow has no flow, and the one that leaves a flow carries the flow it was in. The
+consumer takes the flow as it comes: a name matching `^[a-z][a-z0-9_]{0,63}$` or nothing; anything else is
+skipped as malformed. The repeat check compares it too, so the same position with another flow is rejected.
+The projection copies it to the message, and the API shows it in `metadata.flow` when there is one.
+
+### Reading a conversation by flow
+
+`conversation_flow_segments` (history migration `000002`) cuts a conversation into runs, one row per run, from
+the inbox. It reads the facts again by who handled them, which settles the two messages the stamping rule
+leaves at the edge of a flow:
+
+- A user message belongs to the flow of the next fact that is not a user message, the one that handled it. The
+  message that opens a flow joins it; the one that leaves it joins the next run. With no next fact it keeps the
+  flow it was written in.
+- The conversation's own facts (start, close, a blocked message, the guardrail reply, a failed turn) take the flow
+  of the fact before them, so they never split a run.
+- A run is consecutive facts in one flow, or in none. It ends at a `ConfirmationResolved`: the first user message
+  after one opens the next run, which tells two transfers in a row apart.
+- `outcome` comes from the payment facts: the decision of the last `ConfirmationResolved` (`approved`, `rejected`
+  or `failed`); `abandoned` when a card was offered, never resolved, and another run followed; `expired` when it
+  was the last run and ten minutes have passed (the approval's lifetime); `open` before that; `none` when the run
+  offered no card.
+
+```sql
+SELECT run, coalesce(flow, '(none)') AS flow, from_sequence, to_sequence, events, outcome
+FROM conversation_flow_segments
+WHERE conversation_id = $1
+ORDER BY run;
+```
+
+Every step of the view is a window over `(conversation_id, …)`, and the step read twice is `NOT MATERIALIZED`, so a
+filter on `conversation_id` reaches the inbox's primary key. Measured on 720,000 events: one conversation 0.4 ms,
+the 600 conversations of an account 62 ms with `conversation_id = ANY (ARRAY(SELECT …))`, the whole table 3.2 s.
+`IN (SELECT …)` computes the whole table before it filters, so pass an array for several conversations.
+
+`it/history/flow_segments_test.go` runs the view against real Postgres on seven conversations, and checks from the
+query plan that a read of one conversation scans only its own rows of the inbox.
 
 ## Projection
 
@@ -159,7 +216,7 @@ Shaped after the Smooch (Sunshine Conversations) v2 list-messages call.
   "messages": [
     { "_id": "2", "type": "text", "role": "appUser", "authorId": "<idYapeAccount>", "text": "quiero yapear",
       "received": 1792505243.792, "source": { "type": "api" },
-      "metadata": { "sequence": 2, "sourceEvent": "UserMessageSent", "truncated": false } }
+      "metadata": { "sequence": 2, "sourceEvent": "UserMessageSent", "truncated": false, "flow": "p2p" } }
   ],
   "meta": { "hasMore": true, "beforeCursor": "2", "afterCursor": "11" },
   "links": { "prev": "/v1/conversations/conv_v1_.../messages?page[before]=2" }
@@ -171,7 +228,7 @@ Shaped after the Smooch (Sunshine Conversations) v2 list-messages call.
 | `_id` | the event's `sequence`, as a string; unique within the conversation |
 | `role`, `authorId` | the projection table above |
 | `received` | the event time, Unix seconds with milliseconds |
-| `metadata` | `sequence`, `sourceEvent`, `truncated` |
+| `metadata` | `sequence`, `sourceEvent`, `truncated`, and `flow` when the message took place in a flow |
 
 Left out: `name`, `avatarUrl`, `actions`, `items`, `mediaUrl`, `quotedMessage`, `subroles`. There is no
 `POST`: messages enter only through Kafka.

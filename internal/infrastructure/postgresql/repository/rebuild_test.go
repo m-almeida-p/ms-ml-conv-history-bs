@@ -16,7 +16,7 @@ import (
 
 var inboxColumns = []string{
 	"conversation_id", "sequence", "event_name", "event_version", "payload", "metadata",
-	"correlation_id", "id_yape_account", "actor", "occurred_at", "kafka_topic", "kafka_partition", "kafka_offset",
+	"correlation_id", "id_yape_account", "actor", "flow", "occurred_at", "kafka_topic", "kafka_partition", "kafka_offset",
 }
 
 // anyArgs matches n arguments of any value.
@@ -31,10 +31,10 @@ func anyArgs(n int) []any {
 
 func TestRebuild(t *testing.T) {
 	at := time.Date(2026, 10, 20, 14, 0, 0, 0, time.UTC)
-	account, actor, correlation := "acc-1", "user", "c-1"
+	account, actor, correlation, flow := "acc-1", "user", "c-1", "p2p"
 
 	row := func(rows *pgxmock.Rows, id int64, seq int, name string) *pgxmock.Rows {
-		return rows.AddRow("conv", seq, name, 1, json.RawMessage(`{}`), json.RawMessage(`{}`), &correlation, &account, &actor, at, "t", int32(0), id)
+		return rows.AddRow("conv", seq, name, 1, json.RawMessage(`{}`), json.RawMessage(`{}`), &correlation, &account, &actor, &flow, at, "t", int32(0), id)
 	}
 	// project keeps user messages, skips tool summaries and flags anything else.
 	project := func(e domain.InboxEvent) (*domain.Message, error) {
@@ -79,7 +79,7 @@ func TestRebuild(t *testing.T) {
 				m.ExpectBegin()
 				m.ExpectExec("DELETE FROM conversation_messages").WillReturnResult(pgxmock.NewResult("DELETE", 0))
 				m.ExpectQuery("FROM conversation_inbox").WithArgs("", -1, 5).WillReturnRows(rows)
-				m.ExpectExec("INSERT INTO conversation_messages").WithArgs(anyArgs(10)...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
+				m.ExpectExec("INSERT INTO conversation_messages").WithArgs(anyArgs(11)...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 				m.ExpectCommit()
 			},
 			want: domain.RebuildResult{Events: 3, Messages: 1, Invalid: 1},
@@ -96,10 +96,10 @@ func TestRebuild(t *testing.T) {
 				m.ExpectBegin()
 				m.ExpectExec("DELETE FROM conversation_messages").WillReturnResult(pgxmock.NewResult("DELETE", 0))
 				m.ExpectQuery("FROM conversation_inbox").WithArgs("", -1, 2).WillReturnRows(first)
-				m.ExpectExec("INSERT INTO conversation_messages").WithArgs(anyArgs(10)...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
-				m.ExpectExec("INSERT INTO conversation_messages").WithArgs(anyArgs(10)...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
+				m.ExpectExec("INSERT INTO conversation_messages").WithArgs(anyArgs(11)...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
+				m.ExpectExec("INSERT INTO conversation_messages").WithArgs(anyArgs(11)...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 				m.ExpectQuery("FROM conversation_inbox").WithArgs("conv", 2, 2).WillReturnRows(second)
-				m.ExpectExec("INSERT INTO conversation_messages").WithArgs(anyArgs(10)...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
+				m.ExpectExec("INSERT INTO conversation_messages").WithArgs(anyArgs(11)...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 				m.ExpectCommit()
 			},
 			want: domain.RebuildResult{Events: 3, Messages: 3},
@@ -110,7 +110,7 @@ func TestRebuild(t *testing.T) {
 			expect: func(m pgxmock.PgxPoolIface) {
 				var none *string
 				rows := pgxmock.NewRows(inboxColumns).
-					AddRow("conv", 1, "ToolActionSummarized", 1, json.RawMessage(`{}`), json.RawMessage(`{}`), none, none, none, at, "t", int32(0), int64(1))
+					AddRow("conv", 1, "ToolActionSummarized", 1, json.RawMessage(`{}`), json.RawMessage(`{}`), none, none, none, none, at, "t", int32(0), int64(1))
 				m.ExpectBegin()
 				m.ExpectExec("DELETE FROM conversation_messages").WillReturnResult(pgxmock.NewResult("DELETE", 0))
 				m.ExpectQuery("FROM conversation_inbox").WithArgs(anyArgs(3)...).WillReturnRows(rows)
@@ -156,7 +156,7 @@ func TestRebuild(t *testing.T) {
 			batchSize: 2,
 			expect: func(m pgxmock.PgxPoolIface) {
 				rows := pgxmock.NewRows(inboxColumns).
-					AddRow("conv", "not a number", "E", 1, json.RawMessage(`{}`), json.RawMessage(`{}`), nil, nil, nil, at, "t", int32(0), int64(1))
+					AddRow("conv", "not a number", "E", 1, json.RawMessage(`{}`), json.RawMessage(`{}`), nil, nil, nil, nil, at, "t", int32(0), int64(1))
 				m.ExpectBegin()
 				m.ExpectExec("DELETE FROM conversation_messages").WillReturnResult(pgxmock.NewResult("DELETE", 0))
 				m.ExpectQuery("FROM conversation_inbox").WithArgs(anyArgs(3)...).WillReturnRows(rows)
@@ -195,7 +195,7 @@ func TestRebuild(t *testing.T) {
 				m.ExpectBegin()
 				m.ExpectExec("DELETE FROM conversation_messages").WillReturnResult(pgxmock.NewResult("DELETE", 0))
 				m.ExpectQuery("FROM conversation_inbox").WithArgs(anyArgs(3)...).WillReturnRows(row(pgxmock.NewRows(inboxColumns), 1, 1, "UserMessageSent"))
-				m.ExpectExec("INSERT INTO conversation_messages").WithArgs(anyArgs(10)...).WillReturnError(dbDown)
+				m.ExpectExec("INSERT INTO conversation_messages").WithArgs(anyArgs(11)...).WillReturnError(dbDown)
 				m.ExpectRollback()
 			},
 			wantErr: "upsert message of event t/0/1", wantIs: dbDown,
@@ -254,8 +254,8 @@ func TestRebuildStopsWhenTheContextIsCancelled(t *testing.T) {
 	defer mock.Close()
 
 	rows := pgxmock.NewRows(inboxColumns).
-		AddRow("conv", 1, "ToolActionSummarized", 1, json.RawMessage(`{}`), json.RawMessage(`{}`), nil, nil, nil, at, "t", int32(0), int64(1)).
-		AddRow("conv", 2, "UserMessageSent", 1, json.RawMessage(`{}`), json.RawMessage(`{}`), nil, nil, nil, at, "t", int32(0), int64(2))
+		AddRow("conv", 1, "ToolActionSummarized", 1, json.RawMessage(`{}`), json.RawMessage(`{}`), nil, nil, nil, nil, at, "t", int32(0), int64(1)).
+		AddRow("conv", 2, "UserMessageSent", 1, json.RawMessage(`{}`), json.RawMessage(`{}`), nil, nil, nil, nil, at, "t", int32(0), int64(2))
 	mock.ExpectBegin()
 	mock.ExpectExec("DELETE FROM conversation_messages").WillReturnResult(pgxmock.NewResult("DELETE", 0))
 	mock.ExpectQuery("FROM conversation_inbox").WithArgs(anyArgs(3)...).WillReturnRows(rows)

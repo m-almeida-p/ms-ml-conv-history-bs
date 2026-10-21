@@ -102,8 +102,8 @@ shape and the paging rule.
 ## Database
 
 The tables (`conversation_inbox`, `conversation_messages`) are created by the migrations in
-`../ml-genai-agents-bs-testing/migrations/history/p2p/`, next to the agent's
-(`migrations/agent/p2p/`). Each flow gets its own folder.
+`../ml-genai-agents-bs-testing/migrations/history/conversation/`, next to the agent's
+(`migrations/agent/conversation/`). Each flow gets its own folder.
 
 ```bash
 make migrations/up

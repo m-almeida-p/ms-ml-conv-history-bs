@@ -25,7 +25,7 @@ func stream() []domain.InboxEvent {
 	event := func(seq int, name, payload string) domain.InboxEvent {
 		return domain.InboxEvent{
 			ConversationID: conversation, Sequence: seq, EventName: name, EventVersion: 1,
-			Payload: json.RawMessage(payload), Metadata: json.RawMessage(`{}`), IDYapeAccount: "acc-1", Actor: "user",
+			Payload: json.RawMessage(payload), Metadata: json.RawMessage(`{}`), IDYapeAccount: "acc-1", Actor: "user", Flow: flowOf(seq),
 			OccurredAt: at.Add(time.Duration(seq) * time.Second),
 			KafkaTopic: "yape.public.conversation_events", KafkaPartition: int32(seq % 3), KafkaOffset: int64(seq),
 		}
@@ -39,6 +39,16 @@ func stream() []domain.InboxEvent {
 		event(5, "UserMessageSent", `{"text": "@(Juan Perez) 20 soles"}`),
 		event(6, "AgentMessageSent", `{"text": "Revisa tu yapeo", "truncated": true}`),
 	}
+}
+
+// flowOf says which flow the sample stream is in at a position: none while the user
+// is still talking to the dispatcher, the P2P flow from the third event on.
+func flowOf(seq int) string {
+	if seq >= 3 {
+		return "p2p"
+	}
+
+	return ""
 }
 
 func pick(events []domain.InboxEvent, order ...int) []domain.InboxEvent {
@@ -57,7 +67,7 @@ func digest(t *testing.T, pool *pgxpool.Pool) (inbox, messages string) {
 	ctx := context.Background()
 	require.NoError(t, pool.QueryRow(ctx, `
 		SELECT COALESCE(md5(string_agg(concat_ws('|', conversation_id, sequence, event_name, event_version, payload::text,
-			metadata::text, correlation_id, id_yape_account, actor, occurred_at, kafka_topic, kafka_partition, kafka_offset,
+			metadata::text, correlation_id, id_yape_account, actor, flow, occurred_at, kafka_topic, kafka_partition, kafka_offset,
 			projected_at IS NOT NULL), E'\n' ORDER BY conversation_id, sequence)), '')
 		FROM conversation_inbox`).Scan(&inbox))
 	require.NoError(t, pool.QueryRow(ctx, `
@@ -242,6 +252,7 @@ func TestApply(t *testing.T) {
 			{name: "anotherMetadata", change: func(e *domain.InboxEvent) { e.Metadata = json.RawMessage(`{"actor": "agent"}`) }, wantRejected: true},
 			{name: "anotherAccount", change: func(e *domain.InboxEvent) { e.IDYapeAccount = "acc-2" }, wantRejected: true},
 			{name: "noAccountWhereThereWasOne", change: func(e *domain.InboxEvent) { e.IDYapeAccount = "" }, wantRejected: true},
+			{name: "aFlowWhereThereWasNone", change: func(e *domain.InboxEvent) { e.Flow = "p2p" }, wantRejected: true},
 			{name: "anotherActor", change: func(e *domain.InboxEvent) { e.Actor = "agent" }, wantRejected: true},
 			{name: "aCorrelationIDWhereThereWasNone", change: func(e *domain.InboxEvent) { e.CorrelationID = "corr-1" }, wantRejected: true},
 		}

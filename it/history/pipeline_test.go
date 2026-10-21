@@ -2,6 +2,7 @@ package history_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -21,20 +22,21 @@ type chatRow struct {
 	Text        string
 	SourceEvent string
 	Truncated   bool
+	Flow        string
 }
 
 func messagesOf(t *testing.T, pool *pgxpool.Pool, conversationID string) []chatRow {
 	t.Helper()
 
 	rows, err := pool.Query(context.Background(),
-		`SELECT sequence, role, author_id, text, source_event, truncated FROM conversation_messages WHERE conversation_id = $1 ORDER BY sequence`, conversationID)
+		`SELECT sequence, role, author_id, text, source_event, truncated, COALESCE(flow, '') FROM conversation_messages WHERE conversation_id = $1 ORDER BY sequence`, conversationID)
 	require.NoError(t, err)
 	defer rows.Close()
 
 	var out []chatRow
 	for rows.Next() {
 		var r chatRow
-		require.NoError(t, rows.Scan(&r.Sequence, &r.Role, &r.Author, &r.Text, &r.SourceEvent, &r.Truncated))
+		require.NoError(t, rows.Scan(&r.Sequence, &r.Role, &r.Author, &r.Text, &r.SourceEvent, &r.Truncated, &r.Flow))
 		out = append(out, r)
 	}
 	require.NoError(t, rows.Err())
@@ -88,13 +90,14 @@ func TestPipelineThroughDebezium(t *testing.T) {
 	events := []struct {
 		name    string
 		payload string
+		flow    string
 	}{
-		{"ConversationStarted", `{"channel": "a2a"}`},
-		{"UserMessageSent", `{"text": "quiero yapear", "sequence": 1}`},
-		{"ToolActionSummarized", `{"tool_name": "draft_transfer"}`},
-		{"AgentMessageSent", `{"text": "¿A quién y cuánto?", "sequence": 2}`},
-		{"GuardrailResponseSent", `{"response_text": "No puedo ayudarte con eso", "level": "level1"}`},
-		{"UserMessageBlocked", `{"reason": "jailbreak"}`},
+		{"ConversationStarted", `{"channel": "a2a"}`, ""},
+		{"UserMessageSent", `{"text": "quiero yapear", "sequence": 1}`, ""},
+		{"ToolActionSummarized", `{"tool_name": "draft_transfer"}`, "p2p"},
+		{"AgentMessageSent", `{"text": "¿A quién y cuánto?", "sequence": 2}`, "p2p"},
+		{"GuardrailResponseSent", `{"response_text": "No puedo ayudarte con eso", "level": "level1"}`, "p2p"},
+		{"UserMessageBlocked", `{"reason": "jailbreak"}`, "p2p"},
 	}
 
 	consumer := startConsumer(t, consumerBinary(t), s.brokers, "yape.public.conversation_events", uniqueName("pipeline-group"), historyDSN)
@@ -103,9 +106,9 @@ func TestPipelineThroughDebezium(t *testing.T) {
 	require.NoError(t, err)
 	for i, e := range events {
 		_, err := tx.Exec(ctx, `
-			INSERT INTO conversation_events (conversation_id, sequence, event_name, event_version, payload, metadata, correlation_id, id_yape_account, actor, occurred_at)
-			VALUES ($1, $3, $2, 1, $4::jsonb, '{"actor": "user"}'::jsonb, 'corr-pipeline', 'acc-pipeline', 'user', now())`,
-			conversation, e.name, i+1, e.payload)
+			INSERT INTO conversation_events (conversation_id, sequence, event_name, event_version, payload, metadata, correlation_id, id_yape_account, actor, flow, occurred_at)
+			VALUES ($1, $3, $2, 1, $4::jsonb, '{"actor": "user"}'::jsonb, 'corr-pipeline', 'acc-pipeline', 'user', NULLIF($5, ''), now())`,
+			conversation, e.name, i+1, e.payload, e.flow)
 		require.NoError(t, err)
 	}
 	require.NoError(t, tx.Commit(ctx))
@@ -119,8 +122,8 @@ func TestPipelineThroughDebezium(t *testing.T) {
 
 	assert.Equal(t, []chatRow{
 		{Sequence: 2, Role: "appUser", Author: "acc-pipeline", Text: "quiero yapear", SourceEvent: "UserMessageSent"},
-		{Sequence: 4, Role: "appMaker", Author: "ms-ml-genai-agent-bs", Text: "¿A quién y cuánto?", SourceEvent: "AgentMessageSent"},
-		{Sequence: 5, Role: "appMaker", Author: "ms-ml-genai-agent-bs", Text: "No puedo ayudarte con eso", SourceEvent: "GuardrailResponseSent"},
+		{Sequence: 4, Role: "appMaker", Author: "ms-ml-genai-agent-bs", Text: "¿A quién y cuánto?", SourceEvent: "AgentMessageSent", Flow: "p2p"},
+		{Sequence: 5, Role: "appMaker", Author: "ms-ml-genai-agent-bs", Text: "No puedo ayudarte con eso", SourceEvent: "GuardrailResponseSent", Flow: "p2p"},
 	}, messagesOf(t, history, conversation))
 	assert.Equal(t, 6, countWhere(t, history, "conversation_inbox", conversation), "every event is in the inbox, chat or not")
 
@@ -237,6 +240,30 @@ func TestPipelineTopic(t *testing.T) {
 		waitForMessages(t, history, conversation, 1)
 
 		assert.Equal(t, 1, countWhere(t, history, "conversation_inbox", conversation), "only the marker is stored")
+	})
+
+	t.Run("theFlowOfAFactTravelsToItsMessage", func(t *testing.T) {
+		conversation := uniqueName("flow")
+		inFlow := func(sequence int, name, text, flow string) []byte {
+			row := eventRow(conversation, sequence, name, map[string]any{"text": text})
+			if flow != "" {
+				row["flow"] = flow
+			}
+			body, _ := json.Marshal(row)
+
+			return framed(4, body)
+		}
+		prod.send(topic, 0, eventKey(conversation), inFlow(1, "UserMessageSent", "quiero yapear", ""))
+		prod.send(topic, 0, eventKey(conversation), inFlow(2, "AgentMessageSent", "¿Cuánto?", "p2p"))
+		prod.send(topic, 0, eventKey(conversation), inFlow(3, "UserMessageSent", "20 soles", "p2p"))
+
+		waitForMessages(t, history, conversation, 3)
+
+		var flows []string
+		for _, m := range messagesOf(t, history, conversation) {
+			flows = append(flows, m.Flow)
+		}
+		assert.Equal(t, []string{"", "p2p", "p2p"}, flows, "the message that opens a flow has none")
 	})
 
 	t.Run("anotherEventAtAUsedPositionIsSkippedAndTheFirstStays", func(t *testing.T) {

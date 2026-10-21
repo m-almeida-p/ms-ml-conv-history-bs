@@ -44,6 +44,15 @@ var ErrInvalidEvent = errors.New("invalid event")
 // code, never the row.
 var ErrRejected = errors.New("event rejected by the store")
 
+// flowName is what a flow is called in the event store: lower-case words joined by
+// underscores, such as p2p or bill_payment.
+var flowName = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+
+// ValidFlow reports whether name can be a flow.
+func ValidFlow(name string) bool {
+	return flowName.MatchString(name)
+}
+
 // InboxEvent is one conversation_events row as it arrived from Kafka. Its stream
 // position, ConversationID and Sequence, is its identity. Payload and Metadata
 // hold JSON. An absent CorrelationID, IDYapeAccount or Actor is the empty string.
@@ -57,7 +66,9 @@ type InboxEvent struct {
 	CorrelationID  string
 	IDYapeAccount  string
 	Actor          string
-	OccurredAt     time.Time
+	// Flow is the flow the fact took place in, such as p2p, or empty outside any flow.
+	Flow       string
+	OccurredAt time.Time
 
 	// Where the record came from, kept for audit only.
 	KafkaTopic     string
@@ -92,7 +103,9 @@ type Message struct {
 	Truncated      bool
 	SourceEvent    string
 	IDYapeAccount  string
-	ReceivedAt     time.Time
+	// Flow is the flow the message took place in, or empty outside any flow.
+	Flow       string
+	ReceivedAt time.Time
 }
 
 // ApplyResult tells what Apply did with an event.

@@ -98,15 +98,15 @@ func (r *Inbox) readBatch(ctx context.Context, tx pgx.Tx, conversationID string,
 	events := make([]domain.InboxEvent, 0, r.batchSize)
 	for rows.Next() {
 		var (
-			e                                domain.InboxEvent
-			correlationID, account, actorRaw *string
+			e                                      domain.InboxEvent
+			correlationID, account, actorRaw, flow *string
 		)
 		if err := rows.Scan(&e.ConversationID, &e.Sequence, &e.EventName, &e.EventVersion,
-			&e.Payload, &e.Metadata, &correlationID, &account, &actorRaw, &e.OccurredAt,
+			&e.Payload, &e.Metadata, &correlationID, &account, &actorRaw, &flow, &e.OccurredAt,
 			&e.KafkaTopic, &e.KafkaPartition, &e.KafkaOffset); err != nil {
 			return nil, dbError("scan inbox event", err)
 		}
-		e.CorrelationID, e.IDYapeAccount, e.Actor = value(correlationID), value(account), value(actorRaw)
+		e.CorrelationID, e.IDYapeAccount, e.Actor, e.Flow = value(correlationID), value(account), value(actorRaw), value(flow)
 		events = append(events, e)
 	}
 	if err := rows.Err(); err != nil {

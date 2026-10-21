@@ -75,7 +75,7 @@ func (r *Inbox) Apply(ctx context.Context, event domain.InboxEvent, message *dom
 	tag, err := tx.Exec(ctx, sqlInsertInbox,
 		event.ConversationID, event.Sequence, event.EventName, event.EventVersion,
 		event.Payload, event.Metadata,
-		nullable(event.CorrelationID), nullable(event.IDYapeAccount), nullable(event.Actor), event.OccurredAt,
+		nullable(event.CorrelationID), nullable(event.IDYapeAccount), nullable(event.Actor), nullable(event.Flow), event.OccurredAt,
 		event.KafkaTopic, event.KafkaPartition, event.KafkaOffset)
 	if err != nil {
 		return domain.ApplyResult{}, writeError(fmt.Sprintf("insert inbox event %s", event.Ref()), err)
@@ -107,7 +107,7 @@ type rowQuerier interface {
 
 // sameEvent confirms that the inbox row at event's position holds this event. It
 // returns nil for a genuine repeat and domain.ErrRejected when the position holds
-// another event. Name, version, payload, metadata, correlation id, account and actor
+// another event. Name, version, payload, metadata, correlation id, account, actor and flow
 // are compared (an absent value equals only an absent one); JSON by value, so the
 // order of keys does not matter. The time is left out on purpose: its precision
 // differs between the database and the record.
@@ -115,7 +115,7 @@ func sameEvent(ctx context.Context, q rowQuerier, event domain.InboxEvent) error
 	var same bool
 	err := q.QueryRow(ctx, sqlSelectInboxSame,
 		event.ConversationID, event.Sequence, event.EventName, event.EventVersion, event.Payload, event.Metadata,
-		nullable(event.CorrelationID), nullable(event.IDYapeAccount), nullable(event.Actor)).Scan(&same)
+		nullable(event.CorrelationID), nullable(event.IDYapeAccount), nullable(event.Actor), nullable(event.Flow)).Scan(&same)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// The row was there a moment ago (ON CONFLICT said so) and is gone: not a
 		// repeat we can vouch for, and worth another attempt.
@@ -156,7 +156,7 @@ func upsertMessage(ctx context.Context, tx pgx.Tx, message domain.Message) error
 	_, err := tx.Exec(ctx, sqlUpsertMessage,
 		message.ConversationID, message.Sequence, string(message.Role), message.AuthorID,
 		message.Type, message.Text, message.Truncated, message.SourceEvent,
-		nullable(message.IDYapeAccount), message.ReceivedAt)
+		nullable(message.IDYapeAccount), nullable(message.Flow), message.ReceivedAt)
 
 	return err
 }
