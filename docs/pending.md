@@ -45,7 +45,7 @@ only: no Postgres, no connector.
 
 | # | Item | Detail | Status |
 |---|------|--------|--------|
-| 3.1 | Other flows' facts | Bill payment writes conversation facts through its agents (stamped `bill_payment`) but records no payment facts of its own. When it does, it builds its own `FactRecorder` with `WithFlowName(flows.BillPayment)` and, if it needs tables, a folder and table names carrying the flow | Not started |
+| 3.1 | Other flows' facts | Bill payment writes conversation facts through its agents (stamped `bill_payment`) but records no payment facts of its own. When it does, it builds its own `ServiceEventRecorder` with `WithFlowName(flows.BillPayment)` and, if it needs tables, a folder and table names carrying the flow | Not started |
 | 3.2 | Repos without a remote | `ms-ml-conv-history-bs`, `ml-genai-agents-bs-testing` and `cluster` (Kafka Connect, `wal_level=logical`) exist only on the laptop; `ms-ml-genai-agents-bs` is pushed. Where they live is a decision for the squad | Decision |
 
 ## 4. Limits of the tests
