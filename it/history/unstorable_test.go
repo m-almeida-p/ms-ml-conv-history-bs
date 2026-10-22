@@ -21,7 +21,7 @@ func TestApplyRefusesWhatTheStoreCannotHold(t *testing.T) {
 	pool := newPool(t)
 	migrateUp(t, pool)
 	ctx := context.Background()
-	repo := repository.NewInbox(pool)
+	repo := repository.NewPostgresInboxRepository(pool)
 
 	valid := func() domain.InboxEvent {
 		return domain.InboxEvent{

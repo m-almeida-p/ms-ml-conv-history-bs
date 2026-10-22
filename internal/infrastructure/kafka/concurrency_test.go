@@ -49,7 +49,7 @@ func TestConsumerCountersCanBeReadWhileItConsumes(t *testing.T) {
 	const records, readers, reads = 200, 8, 300
 
 	scenario := func(exec concurrent.Executor) []int64 {
-		messages := concurrent.Collect(concurrent.Sequential, records, func(i int) resource.Message { return message(int64(i), validBody) })
+		messages := concurrent.Collect(concurrent.Sequential, records, func(i int) resource.Record { return message(int64(i), validBody) })
 		src := &fakeSource{messages: messages, journal: &journal{}}
 		ingest := mocks.NewProjection(t)
 		ingest.On("Handle", mock.Anything, mock.Anything).Return(domain.ApplyResult{Applied: true, Projected: true}, nil)

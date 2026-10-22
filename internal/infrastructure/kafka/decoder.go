@@ -80,14 +80,14 @@ type problem struct {
 	field  string
 }
 
-func (p *problem) at(record resource.Message) *DecodeError {
+func (p *problem) at(record resource.Record) *DecodeError {
 	return &DecodeError{Topic: record.Topic, Partition: record.Partition, Offset: record.Offset, Reason: p.reason, Field: p.field}
 }
 
 // Decode turns a record into an inbox event. A tombstone (an empty or null
 // value) returns nil without error, since there is nothing to store. Any other
 // problem returns a *DecodeError.
-func Decode(record resource.Message) (*domain.InboxEvent, error) {
+func Decode(record resource.Record) (*domain.InboxEvent, error) {
 	body, tombstone, p := unframe(record.Value)
 	if p != nil {
 		return nil, p.at(record)

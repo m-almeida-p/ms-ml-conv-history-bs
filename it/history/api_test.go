@@ -57,7 +57,7 @@ func TestAPI(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := pool.Exec(ctx, `
-		INSERT INTO conversation_messages (conversation_id, sequence, role, author_id, text, source_event, id_yape_account, received_at)
+		INSERT INTO conversation_messages (conversation_id, sequence, role, author_id, text, event_name, id_yape_account, occurred_at)
 		SELECT 'conv_big', s, CASE WHEN s % 2 = 1 THEN 'appUser' ELSE 'appMaker' END,
 		       CASE WHEN s % 2 = 1 THEN 'acc-api' ELSE 'ms-ml-genai-agent-bs' END, 'message ' || s, 'UserMessageSent', 'acc-api',
 		       '2026-10-20T10:00:00Z'::timestamptz + s * interval '1 second'
@@ -203,7 +203,7 @@ func TestAPI(t *testing.T) {
 			strings.Repeat("x", 900_000), // close to Kafka's default 1 MB record limit
 		}
 		for i, text := range texts {
-			_, err := pool.Exec(ctx, `INSERT INTO conversation_messages (conversation_id, sequence, role, author_id, text, source_event, id_yape_account, received_at)
+			_, err := pool.Exec(ctx, `INSERT INTO conversation_messages (conversation_id, sequence, role, author_id, text, event_name, id_yape_account, occurred_at)
 				VALUES ('conv_text', $1, 'appUser', 'a', $2, 'UserMessageSent', 'acc-text', now())`, i+1, text)
 			require.NoError(t, err)
 		}

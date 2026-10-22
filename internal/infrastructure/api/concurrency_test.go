@@ -24,7 +24,7 @@ func ptr(s string) *string { return &s }
 func TestServerAnswersTheSameWhenRequestsArriveAtOnce(t *testing.T) {
 	at := time.Date(2026, 10, 20, 14, 7, 23, 0, time.UTC)
 	message := func(id int64) domain.Message {
-		return domain.Message{ConversationID: "conv_a", Sequence: int(id), Role: domain.RoleUser, AuthorID: "acc-1", Type: "text", Text: "hola", SourceEvent: "UserMessageSent", ReceivedAt: at}
+		return domain.Message{ConversationID: "conv_a", Sequence: int(id), Role: domain.RoleUser, AuthorID: "acc-1", Type: "text", Text: "hola", EventName: "UserMessageSent", OccurredAt: at}
 	}
 	page := func(direction domain.Direction, ids ...int64) domain.MessagePage {
 		messages := concurrent.Map(ids, message)
@@ -38,7 +38,7 @@ func TestServerAnswersTheSameWhenRequestsArriveAtOnce(t *testing.T) {
 	history.On("Messages", mock.Anything, service.MessagesRequest{ConversationID: "conv_a", After: ptr("5")}).Return(page(domain.DirectionAfter, 6), nil).Maybe()
 	history.On("Messages", mock.Anything, service.MessagesRequest{ConversationID: "conv_zzz"}).Return(domain.MessagePage{}, domain.ErrNotFound).Maybe()
 	history.On("Messages", mock.Anything, service.MessagesRequest{ConversationID: "conv_a", Before: ptr("abc")}).Return(domain.MessagePage{}, domain.ErrInvalidCursor).Maybe()
-	history.On("Conversations", mock.Anything, "acc-1").Return(domain.ConversationList{Conversations: []domain.ConversationSummary{{ConversationID: "conv_a", MessageCount: 3, FirstReceivedAt: at, LastReceivedAt: at}}}, nil).Maybe()
+	history.On("Conversations", mock.Anything, "acc-1").Return(domain.ConversationList{Conversations: []domain.ConversationSummary{{ConversationID: "conv_a", MessageCount: 3, FirstOccurredAt: at, LastOccurredAt: at}}}, nil).Maybe()
 	history.On("Conversations", mock.Anything, "").Return(domain.ConversationList{}, domain.ErrInvalidRequest).Maybe()
 	history.On("Messages", mock.Anything, service.MessagesRequest{ConversationID: "conv_boom"}).Return(domain.MessagePage{}, errors.New("store down")).Maybe()
 

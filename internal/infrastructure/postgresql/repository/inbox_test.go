@@ -16,7 +16,7 @@ import (
 	"github.com/yaperos/ms-ml-conv-history-bs/internal/core/port/repository"
 )
 
-var _ repository.InboxRepository = (*Inbox)(nil)
+var _ repository.InboxRepository = (*PostgresInboxRepository)(nil)
 
 func TestApply(t *testing.T) {
 	occurredAt := time.Date(2026, 10, 20, 14, 13, 41, 0, time.UTC)
@@ -30,7 +30,7 @@ func TestApply(t *testing.T) {
 	}
 	message := &domain.Message{
 		ConversationID: "conv_v1_a", Sequence: 2, Role: domain.RoleUser, AuthorID: "acc-1",
-		Type: "text", Text: "hola", SourceEvent: "UserMessageSent", IDYapeAccount: "acc-1", Flow: "p2p", ReceivedAt: occurredAt,
+		Type: "text", Text: "hola", EventName: "UserMessageSent", IDYapeAccount: "acc-1", Flow: "p2p", OccurredAt: occurredAt,
 	}
 
 	insertArgs := []any{
@@ -153,7 +153,7 @@ func TestApply(t *testing.T) {
 			defer mock.Close()
 			tt.expect(mock)
 
-			got, err := NewInbox(mock).Apply(context.Background(), tt.event, tt.message)
+			got, err := NewPostgresInboxRepository(mock).Apply(context.Background(), tt.event, tt.message)
 
 			if tt.wantErr != "" {
 				require.Error(t, err)
@@ -178,7 +178,7 @@ func TestApplyErrorNeverCarriesTheEventContent(t *testing.T) {
 	mock.ExpectRollback()
 
 	event := domain.InboxEvent{ConversationID: "conv", Sequence: 9, Payload: json.RawMessage(`{"text": "card 4111"}`)}
-	_, err = NewInbox(mock).Apply(context.Background(), event, nil)
+	_, err = NewPostgresInboxRepository(mock).Apply(context.Background(), event, nil)
 
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "4111")
@@ -187,18 +187,18 @@ func TestApplyErrorNeverCarriesTheEventContent(t *testing.T) {
 func TestWithBatchSize(t *testing.T) {
 	tests := []struct {
 		name string
-		opts []Option
+		opts []PostgresInboxRepositoryOption
 		want int
 	}{
 		{name: "defaultWithoutOptions", want: defaultBatchSize},
-		{name: "positiveValueIsUsed", opts: []Option{WithBatchSize(2)}, want: 2},
-		{name: "zeroKeepsTheDefault", opts: []Option{WithBatchSize(0)}, want: defaultBatchSize},
-		{name: "negativeKeepsTheDefault", opts: []Option{WithBatchSize(-3)}, want: defaultBatchSize},
+		{name: "positiveValueIsUsed", opts: []PostgresInboxRepositoryOption{WithBatchSize(2)}, want: 2},
+		{name: "zeroKeepsTheDefault", opts: []PostgresInboxRepositoryOption{WithBatchSize(0)}, want: defaultBatchSize},
+		{name: "negativeKeepsTheDefault", opts: []PostgresInboxRepositoryOption{WithBatchSize(-3)}, want: defaultBatchSize},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, NewInbox(nil, tt.opts...).batchSize)
+			assert.Equal(t, tt.want, NewPostgresInboxRepository(nil, tt.opts...).batchSize)
 		})
 	}
 }
@@ -249,7 +249,7 @@ func TestApplyWriteErrors(t *testing.T) {
 			}
 			mock.ExpectRollback()
 
-			_, err = NewInbox(mock).Apply(context.Background(), event, message)
+			_, err = NewPostgresInboxRepository(mock).Apply(context.Background(), event, message)
 
 			require.Error(t, err)
 			assert.Equal(t, tt.wantRejected, errors.Is(err, domain.ErrRejected))
@@ -299,7 +299,7 @@ func TestApplyOfARepeatedEventChecksItIsTheSameEvent(t *testing.T) {
 			}
 			mock.ExpectRollback()
 
-			result, err := NewInbox(mock).Apply(context.Background(), event, nil)
+			result, err := NewPostgresInboxRepository(mock).Apply(context.Background(), event, nil)
 
 			if tt.wantErr == "" {
 				require.NoError(t, err)

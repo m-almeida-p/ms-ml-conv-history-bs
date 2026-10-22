@@ -170,7 +170,7 @@ func TestRepliesConformToTheOpenAPISpec(t *testing.T) {
 	at := time.Date(2026, 10, 20, 14, 7, 23, 792_000_000, time.UTC)
 	message := func(sequence int, role domain.Role, event string, truncated bool) domain.Message {
 		return domain.Message{ConversationID: "conv_v1_a", Sequence: sequence, Role: role, AuthorID: "acc-1", Type: "text",
-			Text: "hola", Truncated: truncated, SourceEvent: event, ReceivedAt: at}
+			Text: "hola", Truncated: truncated, EventName: event, OccurredAt: at}
 	}
 
 	tests := []struct {
@@ -216,7 +216,7 @@ func TestRepliesConformToTheOpenAPISpec(t *testing.T) {
 			target: "/v1/conversations?idYapeAccount=acc-1",
 			expect: func(h *mocks.History) {
 				h.On("Conversations", mock.Anything, "acc-1").Return(domain.ConversationList{HasMore: true, Conversations: []domain.ConversationSummary{
-					{ConversationID: "conv_v1_a", MessageCount: 5, FirstReceivedAt: at, LastReceivedAt: at},
+					{ConversationID: "conv_v1_a", MessageCount: 5, FirstOccurredAt: at, LastOccurredAt: at},
 				}}, nil).Once()
 			},
 			wantStatus: http.StatusOK, definition: "handler.conversationsResponse",

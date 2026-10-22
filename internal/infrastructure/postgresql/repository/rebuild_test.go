@@ -40,7 +40,7 @@ func TestRebuild(t *testing.T) {
 	project := func(e domain.InboxEvent) (*domain.Message, error) {
 		switch e.EventName {
 		case "UserMessageSent":
-			return &domain.Message{ConversationID: e.ConversationID, Sequence: e.Sequence, Role: domain.RoleUser, AuthorID: e.IDYapeAccount, Type: "text", Text: "t", SourceEvent: e.EventName, IDYapeAccount: e.IDYapeAccount, ReceivedAt: e.OccurredAt}, nil
+			return &domain.Message{ConversationID: e.ConversationID, Sequence: e.Sequence, Role: domain.RoleUser, AuthorID: e.IDYapeAccount, Type: "text", Text: "t", EventName: e.EventName, IDYapeAccount: e.IDYapeAccount, OccurredAt: e.OccurredAt}, nil
 		case "ToolActionSummarized":
 			return nil, nil
 		default:
@@ -221,7 +221,7 @@ func TestRebuild(t *testing.T) {
 			defer mock.Close()
 			tt.expect(mock)
 
-			repo := NewInbox(mock)
+			repo := NewPostgresInboxRepository(mock)
 			repo.batchSize = tt.batchSize
 			ctx := context.Background()
 			fn := project
@@ -270,7 +270,7 @@ func TestRebuildStopsWhenTheContextIsCancelled(t *testing.T) {
 		return nil, nil
 	}
 
-	_, err = NewInbox(mock).Rebuild(ctx, project)
+	_, err = NewPostgresInboxRepository(mock).Rebuild(ctx, project)
 
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Contains(t, err.Error(), "replay stopped at event t/0/2")

@@ -67,7 +67,7 @@ func run(args []string, log *logging.Logger) error {
 	}
 	defer pool.Close()
 
-	projector := projection.NewService(repository.NewInbox(pool))
+	projector := projection.NewService(repository.NewPostgresInboxRepository(pool))
 
 	if command == "rebuild" {
 		return rebuild(ctx, projector, log)

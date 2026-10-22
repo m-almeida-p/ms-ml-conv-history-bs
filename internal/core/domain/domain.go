@@ -101,11 +101,11 @@ type Message struct {
 	Type           string
 	Text           string
 	Truncated      bool
-	SourceEvent    string
+	EventName      string
 	IDYapeAccount  string
 	// Flow is the flow the message took place in, or empty outside any flow.
 	Flow       string
-	ReceivedAt time.Time
+	OccurredAt time.Time
 }
 
 // ApplyResult tells what Apply did with an event.
@@ -188,8 +188,8 @@ type MessagePage struct {
 type ConversationSummary struct {
 	ConversationID  string
 	MessageCount    int
-	FirstReceivedAt time.Time
-	LastReceivedAt  time.Time
+	FirstOccurredAt time.Time
+	LastOccurredAt  time.Time
 }
 
 // ConversationList is the most recent conversations of an account.

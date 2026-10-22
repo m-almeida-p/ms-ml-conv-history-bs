@@ -56,7 +56,7 @@ SELECT c.conversation_id,
   (SELECT count(*) FROM chat WHERE chat.conversation_id = c.conversation_id),
   (SELECT count(*) FROM conversation_messages m WHERE m.conversation_id = c.conversation_id),
   (SELECT count(*) FROM chat JOIN conversation_messages m USING (conversation_id, sequence)
-     WHERE chat.conversation_id = c.conversation_id AND (m.text IS DISTINCT FROM chat.text OR m.source_event <> chat.event_name)),
+     WHERE chat.conversation_id = c.conversation_id AND (m.text IS DISTINCT FROM chat.text OR m.event_name <> chat.event_name)),
   (SELECT count(*) FROM chat WHERE chat.conversation_id = c.conversation_id
      AND NOT EXISTS (SELECT 1 FROM conversation_messages m WHERE m.conversation_id = chat.conversation_id AND m.sequence = chat.sequence)),
   (SELECT count(*) FROM conversation_messages m WHERE m.conversation_id = c.conversation_id
@@ -102,7 +102,7 @@ SELECT DISTINCT to_json(t)::text FROM (
 ) s WHERE t IS NOT NULL AND t <> '' ORDER BY 1
 SQL
 )"
-other_events="$(psql_q -c "select count(*) from conversation_messages where source_event not in (${CHAT})")"
+other_events="$(psql_q -c "select count(*) from conversation_messages where event_name not in (${CHAT})")"
 in_history="$(psql_q -c "select count(*) from conversation_messages m where to_json(m.text)::text in (select to_json(t)::text from (select payload->>'text' t from conversation_events where event_name in ('UserMessageBlocked','AgentNotificationDelivered') union all select payload->>'outcome_summary' from conversation_events where event_name = 'ToolActionSummarized') s where t is not null and t <> '')")"
 in_api=0
 if [[ "${api_up}" == yes && -n "${forbidden}" ]]; then

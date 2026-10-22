@@ -90,7 +90,7 @@ func TestApply(t *testing.T) {
 	migrateUp(t, pool)
 
 	ctx := context.Background()
-	repo := repository.NewInbox(pool)
+	repo := repository.NewPostgresInboxRepository(pool)
 	projector := projection.NewService(repo)
 
 	reset := func(t *testing.T) {

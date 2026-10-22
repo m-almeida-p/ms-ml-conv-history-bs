@@ -46,8 +46,8 @@ func toConversationsResponse(list domain.ConversationList) conversationsResponse
 		conversations = append(conversations, conversationResponse{
 			ID:            conv.ConversationID,
 			MessageCount:  conv.MessageCount,
-			FirstReceived: unixSeconds(conv.FirstReceivedAt),
-			LastReceived:  unixSeconds(conv.LastReceivedAt),
+			FirstReceived: unixSeconds(conv.FirstOccurredAt),
+			LastReceived:  unixSeconds(conv.LastOccurredAt),
 		})
 	}
 

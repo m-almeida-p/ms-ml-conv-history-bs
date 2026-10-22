@@ -66,7 +66,7 @@ func (s *Stats) Snapshot() StatsSnapshot {
 //   - Delivery is at least once. A redelivered event hits the inbox's primary key
 //     and writes nothing.
 type Consumer struct {
-	source  resource.MessageSource
+	source  resource.RecordSource
 	ingest  service.Projection
 	log     Logger
 	backoff Backoff
@@ -95,7 +95,7 @@ func WithShutdownGrace(d time.Duration) ConsumerOption {
 }
 
 // NewConsumer returns a consumer over source that stores through ingest.
-func NewConsumer(source resource.MessageSource, ingest service.Projection, log Logger, opts ...ConsumerOption) *Consumer {
+func NewConsumer(source resource.RecordSource, ingest service.Projection, log Logger, opts ...ConsumerOption) *Consumer {
 	c := &Consumer{source: source, ingest: ingest, log: log, backoff: DefaultBackoff, sleep: sleepContext, grace: DefaultShutdownGrace}
 	for _, opt := range opts {
 		opt(c)
@@ -115,7 +115,7 @@ func (c *Consumer) Stats() StatsSnapshot {
 // stop, so a source that ends with ctx still live is reported as a failure and
 // the process exits non-zero.
 func (c *Consumer) Run(ctx context.Context) error {
-	err := c.source.Consume(ctx, func(msg resource.Message) error { return c.handle(ctx, msg) })
+	err := c.source.Consume(ctx, func(record resource.Record) error { return c.handle(ctx, record) })
 	if err == nil && !c.stoppedBySignal(ctx) {
 		err = errors.New("kafka source stopped without a shutdown signal")
 	}
@@ -155,12 +155,12 @@ func (c *Consumer) stoppedBySignal(ctx context.Context) bool {
 // may still hand out one more record before its own signal stops the loop; a
 // malformed record or a tombstone would be committed without touching the store,
 // and that commit would cover the offset of an event left unstored just before.
-func (c *Consumer) handle(ctx context.Context, msg resource.Message) error {
+func (c *Consumer) handle(ctx context.Context, record resource.Record) error {
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("stopped before record %s/%d/%d was handled: %w", msg.Topic, msg.Partition, msg.Offset, err)
+		return fmt.Errorf("stopped before record %s/%d/%d was handled: %w", record.Topic, record.Partition, record.Offset, err)
 	}
 
-	event, err := Decode(msg)
+	event, err := Decode(record)
 
 	var decodeErr *DecodeError
 	switch {
@@ -168,11 +168,11 @@ func (c *Consumer) handle(ctx context.Context, msg resource.Message) error {
 		c.stats.Malformed.Add(1)
 		c.log.Warnf("skipping a record that cannot be decoded: %s", decodeErr)
 
-		return c.commit(msg)
+		return c.commit(record)
 	case event == nil:
 		c.stats.Tombstones.Add(1)
 
-		return c.commit(msg)
+		return c.commit(record)
 	}
 
 	result, err := c.store(ctx, *event)
@@ -181,14 +181,14 @@ func (c *Consumer) handle(ctx context.Context, msg resource.Message) error {
 		c.stats.Rejected.Add(1)
 		c.log.Errorf("skipping event, the store refuses it for good: %v", err)
 
-		return c.commit(msg)
+		return c.commit(record)
 	case err != nil:
 		return err
 	}
 
 	c.count(*event, result)
 
-	return c.commit(msg)
+	return c.commit(record)
 }
 
 // store writes the event, retrying in place while the store keeps failing for a
@@ -233,11 +233,11 @@ func (c *Consumer) count(event domain.InboxEvent, result domain.ApplyResult) {
 	}
 }
 
-func (c *Consumer) commit(msg resource.Message) error {
-	if err := c.source.Commit(msg); err != nil {
+func (c *Consumer) commit(record resource.Record) error {
+	if err := c.source.Commit(record); err != nil {
 		// The library logs the returned error. A later commit covers this offset; if
 		// none comes, the broker redelivers the record and the inbox ignores it.
-		return fmt.Errorf("commit %s/%d/%d: %w", msg.Topic, msg.Partition, msg.Offset, err)
+		return fmt.Errorf("commit %s/%d/%d: %w", record.Topic, record.Partition, record.Offset, err)
 	}
 
 	return nil

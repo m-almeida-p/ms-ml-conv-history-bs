@@ -57,7 +57,7 @@ func TestConcurrentWriters(t *testing.T) {
 	pool := newPool(t)
 	migrateUp(t, pool)
 	ctx := context.Background()
-	service := projection.NewService(repository.NewInbox(pool))
+	service := projection.NewService(repository.NewPostgresInboxRepository(pool))
 	events := longStream()
 
 	reset := func() {

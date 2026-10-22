@@ -18,7 +18,7 @@ func TestRebuild(t *testing.T) {
 	migrateUp(t, pool)
 
 	ctx := context.Background()
-	repo := repository.NewInbox(pool)
+	repo := repository.NewPostgresInboxRepository(pool)
 	service := projection.NewService(repo)
 
 	load := func(t *testing.T, events []domain.InboxEvent) {
@@ -54,7 +54,7 @@ func TestRebuild(t *testing.T) {
 		}{
 			{name: "messagesWereEmptied", damage: "DELETE FROM conversation_messages"},
 			{name: "aTextWasWrong", damage: "UPDATE conversation_messages SET text = 'wrong', role = 'appMaker'"},
-			{name: "aStrayRowExisted", damage: "INSERT INTO conversation_messages (conversation_id, sequence, role, author_id, text, source_event, received_at) VALUES ('stray', 1, 'appUser', 'a', 't', 'E', now())"},
+			{name: "aStrayRowExisted", damage: "INSERT INTO conversation_messages (conversation_id, sequence, role, author_id, text, event_name, occurred_at) VALUES ('stray', 1, 'appUser', 'a', 't', 'E', now())"},
 			{name: "nothingWasWrong", damage: "SELECT 1"},
 		}
 
@@ -107,7 +107,7 @@ func TestRebuild(t *testing.T) {
 				_, err := pool.Exec(ctx, "UPDATE conversation_messages SET text = 'stale'")
 				require.NoError(t, err)
 
-				result, err := projection.NewService(repository.NewInbox(pool, repository.WithBatchSize(tt.size))).Rebuild(ctx)
+				result, err := projection.NewService(repository.NewPostgresInboxRepository(pool, repository.WithBatchSize(tt.size))).Rebuild(ctx)
 
 				require.NoError(t, err)
 				assert.Equal(t, domain.RebuildResult{Events: 7, Messages: 4, Invalid: 1}, result)

@@ -74,6 +74,14 @@ definitions:
     type: object
   handler.messageMetadata:
     properties:
+      eventName:
+        description: EventName is the event that produced the message.
+        enum:
+        - UserMessageSent
+        - AgentMessageSent
+        - GuardrailResponseSent
+        example: UserMessageSent
+        type: string
       flow:
         description: Flow is the flow the message took place in, such as p2p. It is
           absent outside any flow. A message the user writes carries the flow they
@@ -86,14 +94,6 @@ definitions:
           Gaps are normal.
         example: 2
         type: integer
-      sourceEvent:
-        description: SourceEvent is the event that produced the message.
-        enum:
-        - UserMessageSent
-        - AgentMessageSent
-        - GuardrailResponseSent
-        example: UserMessageSent
-        type: string
       truncated:
         description: Truncated is true when the recorded text was cut at the agent's
           limit.

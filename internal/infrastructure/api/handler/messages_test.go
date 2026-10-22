@@ -19,18 +19,18 @@ func TestMessages(t *testing.T) {
 	received := time.Date(2026, 10, 20, 14, 7, 23, 792_000_000, time.UTC) // 1792505243.792
 	user := domain.Message{
 		ConversationID: "conv_v1_a", Sequence: 2, Role: domain.RoleUser, AuthorID: "acc-1", Type: "text",
-		Text: "quiero yapear", SourceEvent: "UserMessageSent", ReceivedAt: received,
+		Text: "quiero yapear", EventName: "UserMessageSent", OccurredAt: received,
 	}
 	agent := domain.Message{
 		ConversationID: "conv_v1_a", Sequence: 3, Role: domain.RoleMaker, AuthorID: "ms-ml-genai-agent-bs", Type: "text",
-		Text: "¿A quién?", Truncated: true, SourceEvent: "AgentMessageSent", Flow: "p2p", ReceivedAt: received,
+		Text: "¿A quién?", Truncated: true, EventName: "AgentMessageSent", Flow: "p2p", OccurredAt: received,
 	}
 	storeDown := errors.New("connection reset: password=hunter2")
 
 	userJSON := `{"_id":"2","type":"text","role":"appUser","authorId":"acc-1","text":"quiero yapear","received":1792505243.792,
-		"source":{"type":"api"},"metadata":{"sequence":2,"sourceEvent":"UserMessageSent","truncated":false}}`
+		"source":{"type":"api"},"metadata":{"sequence":2,"eventName":"UserMessageSent","truncated":false}}`
 	agentJSON := `{"_id":"3","type":"text","role":"appMaker","authorId":"ms-ml-genai-agent-bs","text":"¿A quién?","received":1792505243.792,
-		"source":{"type":"api"},"metadata":{"sequence":3,"sourceEvent":"AgentMessageSent","truncated":true,"flow":"p2p"}}`
+		"source":{"type":"api"},"metadata":{"sequence":3,"eventName":"AgentMessageSent","truncated":true,"flow":"p2p"}}`
 
 	tests := []struct {
 		name       string

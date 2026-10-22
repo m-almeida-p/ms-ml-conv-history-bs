@@ -43,8 +43,8 @@ type sourceResponse struct {
 type messageMetadata struct {
 	// Sequence is the position of the message's event in the conversation. Gaps are normal.
 	Sequence int `json:"sequence" example:"2"`
-	// SourceEvent is the event that produced the message.
-	SourceEvent string `json:"sourceEvent" enums:"UserMessageSent,AgentMessageSent,GuardrailResponseSent" example:"UserMessageSent"`
+	// EventName is the event that produced the message.
+	EventName string `json:"eventName" enums:"UserMessageSent,AgentMessageSent,GuardrailResponseSent" example:"UserMessageSent"`
 	// Truncated is true when the recorded text was cut at the agent's limit.
 	Truncated bool `json:"truncated" example:"false"`
 	// Flow is the flow the message took place in, such as p2p. It is absent outside any flow. A message the user writes carries the flow they were in when they wrote it, so the message that opens a flow has none and the one that leaves it carries the flow it was in.

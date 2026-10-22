@@ -34,18 +34,18 @@ func TestRead(t *testing.T) {
 	pool := newPool(t)
 	migrateUp(t, pool)
 	ctx := context.Background()
-	repo := repository.NewMessages(pool)
+	repo := repository.NewPostgresMessageRepository(pool)
 
 	// "big" holds 250 messages, sequences 1 to 250; "exact" holds
 	// exactly one page; "small" and "other" belong to other accounts.
 	_, err := pool.Exec(ctx, `
-		INSERT INTO conversation_messages (conversation_id, sequence, role, author_id, text, source_event, id_yape_account, received_at)
+		INSERT INTO conversation_messages (conversation_id, sequence, role, author_id, text, event_name, id_yape_account, occurred_at)
 		SELECT 'big', s, CASE WHEN s % 2 = 1 THEN 'appUser' ELSE 'appMaker' END, 'a', 'm' || s, 'UserMessageSent', 'acc-1', '2026-10-20T10:00:00Z'::timestamptz + s * interval '1 second'
 		FROM generate_series(1, 250) s;
-		INSERT INTO conversation_messages (conversation_id, sequence, role, author_id, text, source_event, id_yape_account, received_at)
+		INSERT INTO conversation_messages (conversation_id, sequence, role, author_id, text, event_name, id_yape_account, occurred_at)
 		SELECT 'exact', s, 'appUser', 'a', 'm' || s, 'UserMessageSent', 'acc-1', '2026-10-20T12:00:00Z'::timestamptz + s * interval '1 second'
 		FROM generate_series(1, 100) s;
-		INSERT INTO conversation_messages (conversation_id, sequence, role, author_id, text, source_event, id_yape_account, received_at)
+		INSERT INTO conversation_messages (conversation_id, sequence, role, author_id, text, event_name, id_yape_account, occurred_at)
 		VALUES ('small', 2, 'appUser', 'a', 'hola', 'UserMessageSent', 'acc-1', '2026-10-20T11:00:00Z'),
 		       ('small', 5, 'appMaker', 'a', 'chau', 'AgentMessageSent', 'acc-1', '2026-10-20T11:05:00Z'),
 		       ('other', 1, 'appUser', 'a', 'x', 'UserMessageSent', 'acc-2', '2026-10-20T13:00:00Z'),
@@ -136,10 +136,10 @@ func TestRead(t *testing.T) {
 		assert.Equal(t, 1, m.Sequence)
 		assert.Equal(t, domain.RoleMaker, m.Role)
 		assert.Equal(t, "text", m.Type)
-		assert.Equal(t, "GuardrailResponseSent", m.SourceEvent)
+		assert.Equal(t, "GuardrailResponseSent", m.EventName)
 		assert.Empty(t, m.IDYapeAccount, "a NULL account reads as empty")
 		assert.False(t, m.Truncated)
-		assert.Equal(t, 2026, m.ReceivedAt.Year())
+		assert.Equal(t, 2026, m.OccurredAt.Year())
 	})
 
 	t.Run("conversationsOfAnAccount", func(t *testing.T) {
@@ -177,14 +177,14 @@ func TestRead(t *testing.T) {
 			if c.ConversationID != "small" {
 				continue
 			}
-			assert.Equal(t, "2026-10-20T11:00:00Z", c.FirstReceivedAt.UTC().Format("2006-01-02T15:04:05Z"))
-			assert.Equal(t, "2026-10-20T11:05:00Z", c.LastReceivedAt.UTC().Format("2006-01-02T15:04:05Z"))
+			assert.Equal(t, "2026-10-20T11:00:00Z", c.FirstOccurredAt.UTC().Format("2006-01-02T15:04:05Z"))
+			assert.Equal(t, "2026-10-20T11:05:00Z", c.LastOccurredAt.UTC().Format("2006-01-02T15:04:05Z"))
 		}
 	})
 
 	t.Run("moreThanOneListPageSaysSo", func(t *testing.T) {
 		_, err := pool.Exec(ctx, `
-			INSERT INTO conversation_messages (conversation_id, sequence, role, author_id, text, source_event, id_yape_account, received_at)
+			INSERT INTO conversation_messages (conversation_id, sequence, role, author_id, text, event_name, id_yape_account, occurred_at)
 			SELECT 'many-' || lpad(s::text, 3, '0'), 1, 'appUser', 'a', 'x', 'UserMessageSent', 'acc-many', '2026-10-21T00:00:00Z'::timestamptz + s * interval '1 second'
 			FROM generate_series(1, 120) s`)
 		require.NoError(t, err)

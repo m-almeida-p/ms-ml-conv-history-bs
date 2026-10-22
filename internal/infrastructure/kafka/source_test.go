@@ -136,7 +136,7 @@ func TestNewSource(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NotPanics(t, func() {
-			err = src.Consume(context.Background(), func(resource.Message) error { return boom })
+			err = src.Consume(context.Background(), func(resource.Record) error { return boom })
 		})
 
 		require.NoError(t, err)
@@ -202,21 +202,21 @@ func TestSourceConsume(t *testing.T) {
 		name       string
 		record     *core.BrokerMessage
 		handleErr  error
-		wantMsg    *resource.Message
+		wantMsg    *resource.Record
 		wantCbErr  string
 		wantCalled bool
 	}{
 		{
 			name:       "recordBecomesAMessage",
 			record:     &core.BrokerMessage{Topic: strPtr(topic), Partition: 2, Offset: "41", Key: []byte("k"), Raw: []byte("v")},
-			wantMsg:    &resource.Message{Topic: topic, Partition: 2, Offset: 41, Key: []byte("k"), Value: []byte("v")},
+			wantMsg:    &resource.Record{Topic: topic, Partition: 2, Offset: 41, Key: []byte("k"), Value: []byte("v")},
 			wantCalled: true,
 		},
 		{
 			name:       "handlerErrorGoesBackToTheLibrary",
 			record:     &core.BrokerMessage{Topic: strPtr(topic), Offset: "1"},
 			handleErr:  errors.New("left uncommitted"),
-			wantMsg:    &resource.Message{Topic: topic, Offset: 1},
+			wantMsg:    &resource.Record{Topic: topic, Offset: 1},
 			wantCbErr:  "left uncommitted",
 			wantCalled: true,
 		},
@@ -231,9 +231,9 @@ func TestSourceConsume(t *testing.T) {
 				return engine, nil
 			})
 			require.NoError(t, err)
-			var got *resource.Message
+			var got *resource.Record
 
-			err = src.Consume(context.Background(), func(m resource.Message) error {
+			err = src.Consume(context.Background(), func(m resource.Record) error {
 				got = &m
 				return tt.handleErr
 			})
@@ -259,7 +259,7 @@ func TestSourceConsumeReportsACloseFailure(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	err = src.Consume(context.Background(), func(resource.Message) error { return nil })
+	err = src.Consume(context.Background(), func(resource.Record) error { return nil })
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "close failed")
@@ -287,7 +287,7 @@ func TestSourceCommit(t *testing.T) {
 			})
 			require.NoError(t, err)
 
-			err = src.Commit(resource.Message{Topic: topic, Partition: 2, Offset: 41})
+			err = src.Commit(resource.Record{Topic: topic, Partition: 2, Offset: 41})
 
 			if tt.wantErr != "" {
 				require.Error(t, err)

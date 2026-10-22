@@ -13,7 +13,7 @@ import (
 // Rebuild implements repository.InboxRepository. It empties the messages and
 // replays the inbox in keyset batches ordered by (conversation_id, sequence),
 // all in one transaction, so readers see the old messages until the commit.
-func (r *Inbox) Rebuild(ctx context.Context, project func(domain.InboxEvent) (*domain.Message, error)) (domain.RebuildResult, error) {
+func (r *PostgresInboxRepository) Rebuild(ctx context.Context, project func(domain.InboxEvent) (*domain.Message, error)) (domain.RebuildResult, error) {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return domain.RebuildResult{}, dbError("begin transaction", err)
@@ -88,7 +88,7 @@ func replayEvent(ctx context.Context, tx pgx.Tx, project func(domain.InboxEvent)
 // readBatch returns the next inbox events after (conversationID, sequence). The
 // rows are read to the end and closed before it returns, because a connection
 // inside a transaction cannot run another statement while rows are open.
-func (r *Inbox) readBatch(ctx context.Context, tx pgx.Tx, conversationID string, sequence int) ([]domain.InboxEvent, error) {
+func (r *PostgresInboxRepository) readBatch(ctx context.Context, tx pgx.Tx, conversationID string, sequence int) ([]domain.InboxEvent, error) {
 	rows, err := tx.Query(ctx, sqlSelectInboxBatch, conversationID, sequence, r.batchSize)
 	if err != nil {
 		return nil, dbError("read inbox batch", err)

@@ -69,7 +69,7 @@ func run(log *logging.Logger) error {
 	}
 	defer pool.Close()
 
-	server := api.NewServer(history.NewService(repository.NewMessages(pool)), log, pool.Ping)
+	server := api.NewServer(history.NewService(repository.NewPostgresMessageRepository(pool)), log, pool.Ping)
 
 	failed := make(chan error, 1)
 	go func() { failed <- server.Start(":" + strconv.Itoa(cfg.Server.Port)) }()

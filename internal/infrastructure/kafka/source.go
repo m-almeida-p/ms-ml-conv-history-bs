@@ -18,7 +18,7 @@ import (
 
 const clientID = "ms-ml-conv-history-bs"
 
-var _ resource.MessageSource = (*Source)(nil)
+var _ resource.RecordSource = (*Source)(nil)
 
 // subscriber is the part of the library's Subscriber the source uses.
 type subscriber interface {
@@ -95,28 +95,28 @@ func clientConfiguration(cfg config.KafkaConfig) *core.ClientConfiguration {
 	return &conf
 }
 
-// Consume implements resource.MessageSource.
-func (s *Source) Consume(ctx context.Context, handle func(resource.Message) error) error {
+// Consume implements resource.RecordSource.
+func (s *Source) Consume(ctx context.Context, handle func(resource.Record) error) error {
 	callback := func(m *core.BrokerMessage, err error) error {
 		if err != nil {
 			return err
 		}
-		msg, err := toMessage(m)
+		record, err := toRecord(m)
 		if err != nil {
 			return err
 		}
 
-		return handle(msg)
+		return handle(record)
 	}
 
 	return s.sub.Subscribe(ctx, s.topics, callback, nil)
 }
 
-// Commit implements resource.MessageSource. Kafka expects the offset of the next
-// record to read, so it commits msg.Offset + 1.
-func (s *Source) Commit(msg resource.Message) error {
-	topic := msg.Topic
-	committed, err := s.sub.CommitOffsets([]core.TopicPartitionInfo{{Topic: &topic, Partition: msg.Partition, Offset: msg.Offset + 1}})
+// Commit implements resource.RecordSource. Kafka expects the offset of the next
+// record to read, so it commits record.Offset + 1.
+func (s *Source) Commit(record resource.Record) error {
+	topic := record.Topic
+	committed, err := s.sub.CommitOffsets([]core.TopicPartitionInfo{{Topic: &topic, Partition: record.Partition, Offset: record.Offset + 1}})
 	if err != nil {
 		return err
 	}
@@ -134,16 +134,16 @@ func (s *Source) Close() error {
 	return s.sub.Close()
 }
 
-func toMessage(m *core.BrokerMessage) (resource.Message, error) {
+func toRecord(m *core.BrokerMessage) (resource.Record, error) {
 	if m == nil || m.Topic == nil {
-		return resource.Message{}, errors.New("broker record has no topic")
+		return resource.Record{}, errors.New("broker record has no topic")
 	}
 	offset, err := strconv.ParseInt(m.Offset, 10, 64)
 	if err != nil {
-		return resource.Message{}, fmt.Errorf("broker record %s/%d has an offset that is not a number", *m.Topic, m.Partition)
+		return resource.Record{}, fmt.Errorf("broker record %s/%d has an offset that is not a number", *m.Topic, m.Partition)
 	}
 
-	return resource.Message{Topic: *m.Topic, Partition: m.Partition, Offset: offset, Key: m.Key, Value: m.Raw}, nil
+	return resource.Record{Topic: *m.Topic, Partition: m.Partition, Offset: offset, Key: m.Key, Value: m.Raw}, nil
 }
 
 var errUnused = errors.New("this service decodes records itself")

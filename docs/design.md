@@ -114,10 +114,10 @@ erDiagram
         text type "text"
         text text
         boolean truncated
-        varchar source_event
+        varchar event_name
         text id_yape_account
         text flow "p2p, bill_payment, ... or NULL"
-        timestamptz received_at
+        timestamptz occurred_at
     }
     conversation_inbox ||..o| conversation_messages : "a chat event gives one message"
 ```
@@ -157,27 +157,27 @@ The projection copies it to the message, and the API shows it in `metadata.flow`
 
 ### Reading a conversation by flow
 
-`conversation_flow_segments` (history migration `000002`) cuts a conversation into runs, one row per run, from
+`conversation_flow_segments` (history migration `000002`) cuts a conversation into segments, one row per segment, from
 the inbox. It reads the facts again by who handled them, which settles the two messages the stamping rule
 leaves at the edge of a flow:
 
 - A user message belongs to the flow of the next fact that is not a user message, the one that handled it. The
-  message that opens a flow joins it; the one that leaves it joins the next run. With no next fact it keeps the
+  message that opens a flow joins it; the one that leaves it joins the next segment. With no next fact it keeps the
   flow it was written in.
 - The conversation's own facts (start, close, a blocked message, the guardrail reply, a failed turn) take the flow
-  of the fact before them, so they never split a run.
-- A run is consecutive facts in one flow, or in none. It ends at a `ConfirmationResolved`: the first user message
-  after one opens the next run, which tells two transfers in a row apart.
+  of the fact before them, so they never split a segment.
+- A segment is consecutive facts in one flow, or in none. It ends at a `ConfirmationResolved`: the first user message
+  after one opens the next segment, which tells two transfers in a row apart.
 - `outcome` comes from the payment facts: the decision of the last `ConfirmationResolved` (`approved`, `rejected`
-  or `failed`); `abandoned` when a card was offered, never resolved, and another run followed; `expired` when it
-  was the last run and ten minutes have passed (the approval's lifetime); `open` before that; `none` when the run
+  or `failed`); `abandoned` when a card was offered, never resolved, and another segment followed; `expired` when it
+  was the last segment and ten minutes have passed (the approval's lifetime); `open` before that; `none` when the segment
   offered no card.
 
 ```sql
-SELECT run, coalesce(flow, '(none)') AS flow, from_sequence, to_sequence, events, outcome
+SELECT segment, coalesce(flow, '(none)') AS flow, from_sequence, to_sequence, events, outcome
 FROM conversation_flow_segments
 WHERE conversation_id = $1
-ORDER BY run;
+ORDER BY segment;
 ```
 
 Every step of the view is a window over `(conversation_id, …)`, and the step read twice is `NOT MATERIALIZED`, so a
@@ -216,7 +216,7 @@ Shaped after the Smooch (Sunshine Conversations) v2 list-messages call.
   "messages": [
     { "_id": "2", "type": "text", "role": "appUser", "authorId": "<idYapeAccount>", "text": "quiero yapear",
       "received": 1792505243.792, "source": { "type": "api" },
-      "metadata": { "sequence": 2, "sourceEvent": "UserMessageSent", "truncated": false, "flow": "p2p" } }
+      "metadata": { "sequence": 2, "eventName": "UserMessageSent", "truncated": false, "flow": "p2p" } }
   ],
   "meta": { "hasMore": true, "beforeCursor": "2", "afterCursor": "11" },
   "links": { "prev": "/v1/conversations/conv_v1_.../messages?page[before]=2" }
@@ -228,7 +228,7 @@ Shaped after the Smooch (Sunshine Conversations) v2 list-messages call.
 | `_id` | the event's `sequence`, as a string; unique within the conversation |
 | `role`, `authorId` | the projection table above |
 | `received` | the event time, Unix seconds with milliseconds |
-| `metadata` | `sequence`, `sourceEvent`, `truncated`, and `flow` when the message took place in a flow |
+| `metadata` | `sequence`, `eventName`, `truncated`, and `flow` when the message took place in a flow |
 
 Left out: `name`, `avatarUrl`, `actions`, `items`, `mediaUrl`, `quotedMessage`, `subroles`. There is no
 `POST`: messages enter only through Kafka.
@@ -265,10 +265,10 @@ last. The store reads 101 rows and trims one, so `hasMore` costs no second query
 
 A conversation is known when it has chat messages; a conversation of tool events alone answers `404`.
 The conversation list returns the latest 100 with `meta.hasMore` and has no paging. It reads the
-account's messages through `conversation_messages_account_idx (id_yape_account, received_at DESC)`, so its
+account's messages through `conversation_messages_account_idx (id_yape_account, occurred_at DESC)`, so its
 cost grows with the account's history: an account with 80 messages touches 13 buffers and one with 20,000
 messages in 500 conversations touches 131 and answers in under 4 ms (measured on 400,000 messages). A
-covering index `(id_yape_account, conversation_id, received_at DESC)` gave an index-only scan, but not
+covering index `(id_yape_account, conversation_id, occurred_at DESC)` gave an index-only scan, but not
 fewer buffers on the heavy account, so the index stays as it is. The step after that, when a single
 account reaches millions of messages, is a conversations table.
 

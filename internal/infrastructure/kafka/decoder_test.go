@@ -21,8 +21,8 @@ const (
 	headerOnly = "\x00\x00\x00\x00\x04"
 )
 
-func record(value string) resource.Message {
-	return resource.Message{Topic: topic, Partition: 2, Offset: 41, Value: []byte(value)}
+func record(value string) resource.Record {
+	return resource.Record{Topic: topic, Partition: 2, Offset: 41, Value: []byte(value)}
 }
 
 // without returns validBody with one top-level field removed.
@@ -53,7 +53,7 @@ func TestDecodeSample(t *testing.T) {
 	key, err := os.ReadFile(keyPath)
 	require.NoError(t, err)
 
-	got, err := Decode(resource.Message{Topic: topic, Partition: 0, Offset: 0, Key: key, Value: value})
+	got, err := Decode(resource.Record{Topic: topic, Partition: 0, Offset: 0, Key: key, Value: value})
 
 	require.NoError(t, err)
 	require.NotNil(t, got)

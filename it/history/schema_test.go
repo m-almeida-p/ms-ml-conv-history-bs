@@ -85,10 +85,10 @@ func TestSchema(t *testing.T) {
 					"type":            {"text", false},
 					"text":            {"text", false},
 					"truncated":       {"boolean", false},
-					"source_event":    {"character varying", false},
+					"event_name":      {"character varying", false},
 					"id_yape_account": {"text", true},
 					"flow":            {"text", true},
-					"received_at":     {"timestamp with time zone", false},
+					"occurred_at":     {"timestamp with time zone", false},
 				},
 			},
 		}
@@ -124,7 +124,7 @@ func TestSchema(t *testing.T) {
 			{
 				name:  "accountListIndex",
 				query: `SELECT indexdef FROM pg_indexes WHERE indexname = 'conversation_messages_account_idx'`,
-				want:  "CREATE INDEX conversation_messages_account_idx ON public.conversation_messages USING btree (id_yape_account, received_at DESC)",
+				want:  "CREATE INDEX conversation_messages_account_idx ON public.conversation_messages USING btree (id_yape_account, occurred_at DESC)",
 			},
 		}
 
@@ -159,7 +159,7 @@ func TestSchema(t *testing.T) {
 	t.Run("checksAndDefaults", func(t *testing.T) {
 		const insertInbox = `INSERT INTO conversation_inbox (conversation_id, sequence, event_name, event_version, payload, metadata, actor, occurred_at, kafka_topic, kafka_partition, kafka_offset)
 			VALUES ('c', $1::int, 'E', 1, '{}', '{}', $2, now(), 't', 0, 0)`
-		const insertMessage = `INSERT INTO conversation_messages (conversation_id, sequence, role, author_id, text, source_event, received_at)
+		const insertMessage = `INSERT INTO conversation_messages (conversation_id, sequence, role, author_id, text, event_name, occurred_at)
 			VALUES ('c', $1::int, $2, 'a', 'hi', 'E', now())`
 
 		tests := []struct {

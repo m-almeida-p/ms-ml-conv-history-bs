@@ -32,28 +32,28 @@ var (
 // stays flat however large the inbox grows.
 const defaultBatchSize = 500
 
-// Inbox is the Postgres InboxRepository.
-type Inbox struct {
+// PostgresInboxRepository is the Postgres InboxRepository.
+type PostgresInboxRepository struct {
 	db        postgresql.DB
 	batchSize int
 }
 
 // Option tunes an Inbox.
-type Option func(*Inbox)
+type PostgresInboxRepositoryOption func(*PostgresInboxRepository)
 
 // WithBatchSize sets how many inbox rows a rebuild reads at a time. A value
 // below 1 keeps the default.
-func WithBatchSize(size int) Option {
-	return func(i *Inbox) {
+func WithBatchSize(size int) PostgresInboxRepositoryOption {
+	return func(i *PostgresInboxRepository) {
 		if size > 0 {
 			i.batchSize = size
 		}
 	}
 }
 
-// NewInbox returns an inbox over db.
-func NewInbox(db postgresql.DB, opts ...Option) *Inbox {
-	inbox := &Inbox{db: db, batchSize: defaultBatchSize}
+// NewPostgresInboxRepository returns an inbox over db.
+func NewPostgresInboxRepository(db postgresql.DB, opts ...PostgresInboxRepositoryOption) *PostgresInboxRepository {
+	inbox := &PostgresInboxRepository{db: db, batchSize: defaultBatchSize}
 	for _, opt := range opts {
 		opt(inbox)
 	}
@@ -64,7 +64,7 @@ func NewInbox(db postgresql.DB, opts ...Option) *Inbox {
 // Apply implements repository.InboxRepository. The dedupe is the stream key:
 // ON CONFLICT DO NOTHING plus RowsAffected tells a new event from a repeat, and
 // settles two writers racing on the same event without raising an error.
-func (r *Inbox) Apply(ctx context.Context, event domain.InboxEvent, message *domain.Message) (domain.ApplyResult, error) {
+func (r *PostgresInboxRepository) Apply(ctx context.Context, event domain.InboxEvent, message *domain.Message) (domain.ApplyResult, error) {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return domain.ApplyResult{}, dbError("begin transaction", err)
@@ -155,8 +155,8 @@ func writeError(what string, err error) error {
 func upsertMessage(ctx context.Context, tx pgx.Tx, message domain.Message) error {
 	_, err := tx.Exec(ctx, sqlUpsertMessage,
 		message.ConversationID, message.Sequence, string(message.Role), message.AuthorID,
-		message.Type, message.Text, message.Truncated, message.SourceEvent,
-		nullable(message.IDYapeAccount), nullable(message.Flow), message.ReceivedAt)
+		message.Type, message.Text, message.Truncated, message.EventName,
+		nullable(message.IDYapeAccount), nullable(message.Flow), message.OccurredAt)
 
 	return err
 }

@@ -33,8 +33,8 @@ func TestConversations(t *testing.T) {
 			target:      "/v1/conversations?idYapeAccount=acc-1",
 			wantAccount: "acc-1",
 			list: domain.ConversationList{Conversations: []domain.ConversationSummary{
-				{ConversationID: "conv_v1_a", MessageCount: 5, FirstReceivedAt: first, LastReceivedAt: last},
-				{ConversationID: "conv_v1_b", MessageCount: 1, FirstReceivedAt: first, LastReceivedAt: first},
+				{ConversationID: "conv_v1_a", MessageCount: 5, FirstOccurredAt: first, LastOccurredAt: last},
+				{ConversationID: "conv_v1_b", MessageCount: 1, FirstOccurredAt: first, LastOccurredAt: first},
 			}},
 			wantStatus: http.StatusOK,
 			wantJSON: `{"conversations":[
@@ -46,7 +46,7 @@ func TestConversations(t *testing.T) {
 			name:        "moreThanAPageSaysSo",
 			target:      "/v1/conversations?idYapeAccount=acc-1",
 			wantAccount: "acc-1",
-			list:        domain.ConversationList{Conversations: []domain.ConversationSummary{{ConversationID: "c", MessageCount: 1, FirstReceivedAt: first, LastReceivedAt: first}}, HasMore: true},
+			list:        domain.ConversationList{Conversations: []domain.ConversationSummary{{ConversationID: "c", MessageCount: 1, FirstOccurredAt: first, LastOccurredAt: first}}, HasMore: true},
 			wantStatus:  http.StatusOK,
 			wantJSON:    `{"conversations":[{"_id":"c","messageCount":1,"firstReceived":1792505243.5,"lastReceived":1792505243.5}],"meta":{"hasMore":true}}`,
 		},

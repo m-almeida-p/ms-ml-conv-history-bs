@@ -20,7 +20,7 @@ const (
 )
 
 // loadVolume stores 400,000 inbox events: 20,000 conversations of twenty events each,
-// every one the same story so the expected runs are known. The start is outside any
+// every one the same story so the expected segments are known. The start is outside any
 // flow, a P2P transfer follows (a card, its approval), then the chat goes back outside.
 //
 //	1       ConversationStarted
@@ -55,7 +55,7 @@ func loadVolume(t *testing.T, pool *pgxpool.Pool) {
 
 	// The messages table is what finds the conversations of an account.
 	_, err = pool.Exec(context.Background(), `
-		INSERT INTO conversation_messages (conversation_id, sequence, role, author_id, text, source_event, id_yape_account, flow, received_at)
+		INSERT INTO conversation_messages (conversation_id, sequence, role, author_id, text, event_name, id_yape_account, flow, occurred_at)
 		SELECT conversation_id, sequence, 'appUser', id_yape_account, 'x', event_name, id_yape_account, flow, occurred_at
 		FROM conversation_inbox WHERE event_name IN ('UserMessageSent', 'AgentMessageSent')`)
 	require.NoError(t, err)
@@ -65,8 +65,8 @@ func loadVolume(t *testing.T, pool *pgxpool.Pool) {
 	t.Logf("loaded %d events in %s", volumeConversations*volumeEventsEach, time.Since(started).Round(time.Millisecond))
 }
 
-// The runs every conversation of the volume has.
-var volumeRuns = []run{
+// The segments every conversation of the volume has.
+var volumeSegments = []segment{
 	{1, "", 1, 1, 1, "none"},
 	{2, "p2p", 2, 9, 8, "approved"},
 	{3, "", 10, 20, 11, "none"},
@@ -167,10 +167,10 @@ func TestFlowSegmentsAtVolume(t *testing.T) {
 
 	t.Run("oneConversationReadsItsOwnRowsOnly", func(t *testing.T) {
 		started := time.Now()
-		got := runsOf(t, pool, "conv_12345")
+		got := segmentsOf(t, pool, "conv_12345")
 		took := time.Since(started)
 
-		assert.Equal(t, volumeRuns, got, "the runs of a conversation among 20,000")
+		assert.Equal(t, volumeSegments, got, "the segments of a conversation among 20,000")
 		assert.Less(t, took, 2*time.Second)
 
 		plan := planOf(t, pool, `SELECT * FROM conversation_flow_segments WHERE conversation_id = 'conv_12345'`)
@@ -201,16 +201,16 @@ func TestFlowSegmentsAtVolume(t *testing.T) {
 		perConversation := map[string]int{}
 		for rows.Next() {
 			var id string
-			var runs int
-			require.NoError(t, rows.Scan(&id, &runs))
-			perConversation[id] = runs
+			var segments int
+			require.NoError(t, rows.Scan(&id, &segments))
+			perConversation[id] = segments
 		}
 		require.NoError(t, rows.Err())
 		rows.Close()
 
 		assert.Len(t, perConversation, volumeConversations/volumeAccounts)
-		for id, runs := range perConversation {
-			assert.Equal(t, len(volumeRuns), runs, id)
+		for id, segments := range perConversation {
+			assert.Equal(t, len(volumeSegments), segments, id)
 		}
 		assert.Less(t, time.Since(started), 3*time.Second)
 
@@ -223,18 +223,18 @@ func TestFlowSegmentsAtVolume(t *testing.T) {
 	})
 
 	t.Run("everyConversationOfTheTableHasTheSameRuns", func(t *testing.T) {
-		var conversations, runs, wrong int
+		var conversations, segments, wrong int
 		require.NoError(t, pool.QueryRow(ctx, `
 			SELECT count(DISTINCT conversation_id), count(*),
-			       count(*) FILTER (WHERE NOT ((run = 1 AND flow IS NULL AND from_sequence = 1 AND to_sequence = 1 AND outcome = 'none')
-			                                OR (run = 2 AND flow = 'p2p' AND from_sequence = 2 AND to_sequence = 9 AND events = 8 AND outcome = 'approved'
+			       count(*) FILTER (WHERE NOT ((segment = 1 AND flow IS NULL AND from_sequence = 1 AND to_sequence = 1 AND outcome = 'none')
+			                                OR (segment = 2 AND flow = 'p2p' AND from_sequence = 2 AND to_sequence = 9 AND events = 8 AND outcome = 'approved'
 			                                    AND confirmation_ref = 'ref_' || substr(conversation_id, 6))
-			                                OR (run = 3 AND flow IS NULL AND from_sequence = 10 AND to_sequence = 20 AND events = 11 AND outcome = 'none')))
-			FROM conversation_flow_segments`).Scan(&conversations, &runs, &wrong))
+			                                OR (segment = 3 AND flow IS NULL AND from_sequence = 10 AND to_sequence = 20 AND events = 11 AND outcome = 'none')))
+			FROM conversation_flow_segments`).Scan(&conversations, &segments, &wrong))
 
 		assert.Equal(t, volumeConversations, conversations)
-		assert.Equal(t, volumeConversations*len(volumeRuns), runs)
-		assert.Zero(t, wrong, "runs that differ from the story every conversation tells")
+		assert.Equal(t, volumeConversations*len(volumeSegments), segments)
+		assert.Zero(t, wrong, "segments that differ from the story every conversation tells")
 	})
 
 	t.Run("aNewConversationIsReadAtOnceAmongTheOthers", func(t *testing.T) {
@@ -245,6 +245,6 @@ func TestFlowSegmentsAtVolume(t *testing.T) {
 			       ('conv_new', 2, 'AgentMessageSent', 1, '{}', '{}', 'p2p', now(), 't', 0, 900000002)`)
 		require.NoError(t, err)
 
-		assert.Equal(t, []run{{1, "p2p", 1, 2, 2, "none"}}, runsOf(t, pool, "conv_new"))
+		assert.Equal(t, []segment{{1, "p2p", 1, 2, 2, "none"}}, segmentsOf(t, pool, "conv_new"))
 	})
 }

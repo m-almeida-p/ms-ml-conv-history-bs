@@ -24,19 +24,19 @@ type fact struct {
 	ago     time.Duration
 }
 
-// run is one row of conversation_flow_segments.
-type run struct {
-	Run      int
+// segment is one row of conversation_flow_segments.
+type segment struct {
+	Segment  int
 	Flow     string
 	From, To int
 	Events   int
 	Outcome  string
 }
 
-// TestFlowSegments: conversation_flow_segments cuts a conversation into runs. A
-// run is a stretch of one flow (or of none); a user message belongs to the flow
-// that handled it; the guardrail and failure facts belong to the run around them;
-// a run ends at its resolution, and its outcome is read from the payment facts.
+// TestFlowSegments: conversation_flow_segments cuts a conversation into segments. A
+// segment is a stretch of one flow (or of none); a user message belongs to the flow
+// that handled it; the guardrail and failure facts belong to the segment around them;
+// a segment ends at its resolution, and its outcome is read from the payment facts.
 func TestFlowSegments(t *testing.T) {
 	agent := agentFact
 	request := func(ref string) fact { return fact{name: "ConfirmationRequested", flow: "p2p", ref: ref} }
@@ -47,7 +47,7 @@ func TestFlowSegments(t *testing.T) {
 	tests := []struct {
 		name  string
 		facts []fact
-		want  []run
+		want  []segment
 	}{
 		{
 			name: "theMessageThatOpensAFlowJoinsItAndTheOneThatLeavesItJoinsTheNextRun",
@@ -56,7 +56,7 @@ func TestFlowSegments(t *testing.T) {
 				user(""), agent("p2p"), user("p2p"), request("a"), resolved("a", "approved"), // 4-8 the flow
 				user("p2p"), agent(""), user(""), // 9-11 back outside: 9 was written inside the flow
 			},
-			want: []run{
+			want: []segment{
 				{1, "", 1, 3, 3, "none"},
 				{2, "p2p", 4, 8, 5, "approved"},
 				{3, "", 9, 11, 3, "none"},
@@ -68,7 +68,7 @@ func TestFlowSegments(t *testing.T) {
 				user(""), agent("p2p"), user("p2p"), request("a"), resolved("a", "approved"), agent("p2p"),
 				user("p2p"), agent("p2p"), request("b"), resolved("b", "failed"),
 			},
-			want: []run{
+			want: []segment{
 				{1, "p2p", 1, 6, 6, "approved"},
 				{2, "p2p", 7, 10, 4, "failed"},
 			},
@@ -78,7 +78,7 @@ func TestFlowSegments(t *testing.T) {
 			facts: []fact{
 				user(""), agent("p2p"), request("a"), user("p2p"), agent(""), user(""),
 			},
-			want: []run{
+			want: []segment{
 				{1, "p2p", 1, 3, 3, "abandoned"},
 				{2, "", 4, 6, 3, "none"},
 			},
@@ -88,79 +88,79 @@ func TestFlowSegments(t *testing.T) {
 			facts: []fact{
 				user(""), agent("p2p"), user("p2p"), agent("p2p"),
 			},
-			want: []run{{1, "p2p", 1, 4, 4, "none"}},
+			want: []segment{{1, "p2p", 1, 4, 4, "none"}},
 		},
 		{
 			name: "aBlockedMessageInsideAFlowDoesNotSplitIt",
 			facts: []fact{
 				user(""), agent("p2p"),
-				{name: "UserMessageBlocked", flow: "p2p"}, {name: "GuardrailResponseSent"}, // 3-4 belong to the run around them
+				{name: "UserMessageBlocked", flow: "p2p"}, {name: "GuardrailResponseSent"}, // 3-4 belong to the segment around them
 				user("p2p"), agent("p2p"),
 			},
-			want: []run{{1, "p2p", 1, 6, 6, "none"}},
+			want: []segment{{1, "p2p", 1, 6, 6, "none"}},
 		},
 		{
 			name: "aRejectedCardIsARejectedRun",
 			facts: []fact{
 				user(""), agent("p2p"), request("a"), resolved("a", "rejected"),
 			},
-			want: []run{{1, "p2p", 1, 4, 4, "rejected"}},
+			want: []segment{{1, "p2p", 1, 4, 4, "rejected"}},
 		},
 		{
 			name:  "aConversationOfOnlyItsStartIsOneRunOutsideAnyFlow",
 			facts: []fact{{name: "ConversationStarted"}},
-			want:  []run{{1, "", 1, 1, 1, "none"}},
+			want:  []segment{{1, "", 1, 1, 1, "none"}},
 		},
 		{
 			name:  "aUserMessageWithNoFactAfterItKeepsTheFlowItWasWrittenIn",
 			facts: []fact{user(""), agent("p2p"), user("p2p")},
-			want:  []run{{1, "p2p", 1, 3, 3, "none"}},
+			want:  []segment{{1, "p2p", 1, 3, 3, "none"}},
 		},
 		{
 			name:  "aLastMessageOutsideAFlowAfterTheFlowIsItsOwnRun",
 			facts: []fact{user(""), agent("p2p"), user("")},
-			want:  []run{{1, "p2p", 1, 2, 2, "none"}, {2, "", 3, 3, 1, "none"}},
+			want:  []segment{{1, "p2p", 1, 2, 2, "none"}, {2, "", 3, 3, 1, "none"}},
 		},
 		{
 			name: "theLastResolutionOfARunDecidesItsOutcome",
 			facts: []fact{
 				user(""), agent("p2p"), request("a"), resolved("a", "rejected"), resolved("a", "approved"),
 			},
-			want: []run{{1, "p2p", 1, 5, 5, "approved"}},
+			want: []segment{{1, "p2p", 1, 5, 5, "approved"}},
 		},
 		{
 			name: "aResolutionWithoutADecisionIsNotAnOutcome",
 			facts: []fact{
 				user(""), agent("p2p"), request("a"), {name: "ConfirmationResolved", flow: "p2p", ref: "a", bare: true},
 			},
-			want: []run{{1, "p2p", 1, 4, 4, "open"}},
+			want: []segment{{1, "p2p", 1, 4, 4, "open"}},
 		},
 		{
 			name:  "consecutiveUserMessagesTakeTheFlowOfTheFactThatHandledThem",
 			facts: []fact{user(""), user(""), agent("p2p"), user("p2p")},
-			want:  []run{{1, "p2p", 1, 4, 4, "none"}},
+			want:  []segment{{1, "p2p", 1, 4, 4, "none"}},
 		},
 		{
 			name:  "aFailedTurnBetweenAMessageAndItsHandlerDoesNotSplitTheRun",
 			facts: []fact{user(""), {name: "AgentResponseFailed"}, agent("p2p")},
-			want:  []run{{1, "p2p", 1, 3, 3, "none"}},
+			want:  []segment{{1, "p2p", 1, 3, 3, "none"}},
 		},
 		{
 			name:  "theCloseOfAConversationJoinsTheRunBeforeIt",
 			facts: []fact{user(""), agent("p2p"), {name: "ConversationClosed"}},
-			want:  []run{{1, "p2p", 1, 3, 3, "none"}},
+			want:  []segment{{1, "p2p", 1, 3, 3, "none"}},
 		},
 		{
 			name:  "messagesAloneAreCutByTheFlowTheyWereWrittenIn",
 			facts: []fact{user("p2p"), user("")},
-			want:  []run{{1, "p2p", 1, 1, 1, "none"}, {2, "", 2, 2, 1, "none"}},
+			want:  []segment{{1, "p2p", 1, 1, 1, "none"}, {2, "", 2, 2, 1, "none"}},
 		},
 		{
 			name: "aDecisionIsReportedAsTheAgentWroteIt",
 			facts: []fact{
 				user(""), agent("p2p"), request("a"), resolved("a", "APPROVED"),
 			},
-			want: []run{{1, "p2p", 1, 4, 4, "APPROVED"}},
+			want: []segment{{1, "p2p", 1, 4, 4, "APPROVED"}},
 		},
 		{
 			name: "aGuardrailReplyAtTheEdgeOfAFlowJoinsTheRunBeforeIt",
@@ -168,7 +168,7 @@ func TestFlowSegments(t *testing.T) {
 				user(""), agent("p2p"), request("a"), resolved("a", "approved"),
 				user("p2p"), {name: "UserMessageBlocked", flow: "p2p"}, {name: "GuardrailResponseSent"},
 			},
-			want: []run{{1, "p2p", 1, 4, 4, "approved"}, {2, "p2p", 5, 7, 3, "none"}},
+			want: []segment{{1, "p2p", 1, 4, 4, "approved"}, {2, "p2p", 5, 7, 3, "none"}},
 		},
 	}
 
@@ -181,8 +181,8 @@ func TestFlowSegments(t *testing.T) {
 			// A second conversation in the same table must not mix with the first.
 			insertFacts(t, pool, "conv_b", []fact{{name: "ConversationStarted"}, user(""), agent("bill_payment")})
 
-			assert.Equal(t, tt.want, runsOf(t, pool, "conv_a"))
-			assert.Equal(t, []run{{1, "", 1, 1, 1, "none"}, {2, "bill_payment", 2, 3, 2, "none"}}, runsOf(t, pool, "conv_b"),
+			assert.Equal(t, tt.want, segmentsOf(t, pool, "conv_a"))
+			assert.Equal(t, []segment{{1, "", 1, 1, 1, "none"}, {2, "bill_payment", 2, 3, 2, "none"}}, segmentsOf(t, pool, "conv_b"),
 				"another conversation is cut on its own")
 		})
 	}
@@ -199,30 +199,30 @@ func TestFlowSegments(t *testing.T) {
 		insertFacts(t, pool, "conv_recent", recent)
 		insertFacts(t, pool, "conv_old", old)
 
-		assert.Equal(t, "open", runsOf(t, pool, "conv_recent")[0].Outcome, "inside the approval's ten minutes")
-		assert.Equal(t, "expired", runsOf(t, pool, "conv_old")[0].Outcome, "no resolution after the approval's ten minutes")
+		assert.Equal(t, "open", segmentsOf(t, pool, "conv_recent")[0].Outcome, "inside the approval's ten minutes")
+		assert.Equal(t, "expired", segmentsOf(t, pool, "conv_old")[0].Outcome, "no resolution after the approval's ten minutes")
 	})
 }
 
 // TestFlowSegmentsReadTheCardFromThePaymentFacts: the card reference is the first one
-// the run carries; only a ConfirmationRequested makes a run "offer a card", while a
+// the segment carries; only a ConfirmationRequested makes a segment "offer a card", while a
 // challenge or a failed notice carries the reference without an outcome.
 func TestFlowSegmentsReadTheCardFromThePaymentFacts(t *testing.T) {
-	refOf := func(t *testing.T, pool *pgxpool.Pool, conversation string) (ref *string, runs int) {
+	refOf := func(t *testing.T, pool *pgxpool.Pool, conversation string) (ref *string, segments int) {
 		t.Helper()
 
 		rows, err := pool.Query(context.Background(),
-			`SELECT confirmation_ref FROM conversation_flow_segments WHERE conversation_id = $1 ORDER BY run`, conversation)
+			`SELECT confirmation_ref FROM conversation_flow_segments WHERE conversation_id = $1 ORDER BY segment`, conversation)
 		require.NoError(t, err)
 		defer rows.Close()
 
 		for rows.Next() {
 			require.NoError(t, rows.Scan(&ref))
-			runs++
+			segments++
 		}
 		require.NoError(t, rows.Err())
 
-		return ref, runs
+		return ref, segments
 	}
 	card := func(name, ref string) fact { return fact{name: name, flow: "p2p", ref: ref} }
 
@@ -244,21 +244,21 @@ func TestFlowSegmentsReadTheCardFromThePaymentFacts(t *testing.T) {
 			migrateUp(t, pool)
 			insertFacts(t, pool, "conv_a", tt.facts)
 
-			ref, runs := refOf(t, pool, "conv_a")
-			require.Equal(t, 1, runs)
+			ref, segments := refOf(t, pool, "conv_a")
+			require.Equal(t, 1, segments)
 			if tt.wantRef == "" {
 				assert.Nil(t, ref)
 			} else {
 				require.NotNil(t, ref)
 				assert.Equal(t, tt.wantRef, *ref)
 			}
-			assert.Equal(t, tt.wantOutcome, runsOf(t, pool, "conv_a")[0].Outcome)
+			assert.Equal(t, tt.wantOutcome, segmentsOf(t, pool, "conv_a")[0].Outcome)
 		})
 	}
 }
 
 // TestFlowSegmentsFollowTheSequenceNotThePosition: the inbox of a conversation can
-// have holes (a skipped malformed event); the runs report the sequences it holds.
+// have holes (a skipped malformed event); the segments report the sequences it holds.
 func TestFlowSegmentsFollowTheSequenceNotThePosition(t *testing.T) {
 	pool := newPool(t)
 	migrateUp(t, pool)
@@ -268,14 +268,14 @@ func TestFlowSegmentsFollowTheSequenceNotThePosition(t *testing.T) {
 		`UPDATE conversation_inbox SET sequence = sequence * 10, kafka_offset = kafka_offset + 1000 WHERE conversation_id = 'conv_a'`)
 	require.NoError(t, err)
 
-	assert.Equal(t, []run{
+	assert.Equal(t, []segment{
 		{1, "p2p", 10, 20, 2, "none"},
 		{2, "", 30, 50, 3, "none"}, // 30 was written inside p2p and handled by the dispatcher
-	}, runsOf(t, pool, "conv_a"))
+	}, segmentsOf(t, pool, "conv_a"))
 }
 
 // TestFlowSegmentsAcrossConversations: reading several conversations in one query
-// gives each the runs it has alone, and a conversation that does not exist has none.
+// gives each the segments it has alone, and a conversation that does not exist has none.
 func TestFlowSegmentsAcrossConversations(t *testing.T) {
 	pool := newPool(t)
 	migrateUp(t, pool)
@@ -285,30 +285,30 @@ func TestFlowSegmentsAcrossConversations(t *testing.T) {
 	insertFacts(t, pool, "conv_c", []fact{user("")})
 
 	t.Run("anUnknownConversationHasNoRuns", func(t *testing.T) {
-		assert.Empty(t, runsOf(t, pool, "conv_missing"))
+		assert.Empty(t, segmentsOf(t, pool, "conv_missing"))
 	})
 
 	t.Run("severalConversationsInOneQueryAreEachCutOnTheirOwn", func(t *testing.T) {
 		rows, err := pool.Query(context.Background(), `
-			SELECT conversation_id, run, coalesce(flow, ''), from_sequence, to_sequence, events, outcome
+			SELECT conversation_id, segment, coalesce(flow, ''), from_sequence, to_sequence, events, outcome
 			FROM conversation_flow_segments
 			WHERE conversation_id = ANY (ARRAY(SELECT unnest($1::text[])))
-			ORDER BY conversation_id, run`, []string{"conv_a", "conv_b", "conv_missing"})
+			ORDER BY conversation_id, segment`, []string{"conv_a", "conv_b", "conv_missing"})
 		require.NoError(t, err)
 		defer rows.Close()
 
-		got := map[string][]run{}
+		got := map[string][]segment{}
 		for rows.Next() {
 			var id string
-			var r run
-			require.NoError(t, rows.Scan(&id, &r.Run, &r.Flow, &r.From, &r.To, &r.Events, &r.Outcome))
+			var r segment
+			require.NoError(t, rows.Scan(&id, &r.Segment, &r.Flow, &r.From, &r.To, &r.Events, &r.Outcome))
 			got[id] = append(got[id], r)
 		}
 		require.NoError(t, rows.Err())
 
 		require.Len(t, got, 2, "a conversation outside the list or the table adds nothing")
-		assert.Equal(t, runsOf(t, pool, "conv_a"), got["conv_a"])
-		assert.Equal(t, runsOf(t, pool, "conv_b"), got["conv_b"])
+		assert.Equal(t, segmentsOf(t, pool, "conv_a"), got["conv_a"])
+		assert.Equal(t, segmentsOf(t, pool, "conv_b"), got["conv_b"])
 	})
 }
 
@@ -334,7 +334,7 @@ func TestFlowSegmentsApprovalLifetime(t *testing.T) {
 				{name: "ConfirmationRequested", flow: "p2p", ref: "a", ago: tt.ago},
 			})
 
-			assert.Equal(t, tt.want, runsOf(t, pool, "conv_a")[0].Outcome)
+			assert.Equal(t, tt.want, segmentsOf(t, pool, "conv_a")[0].Outcome)
 		})
 	}
 }
@@ -406,19 +406,19 @@ func insertFacts(t *testing.T, pool *pgxpool.Pool, conversation string, facts []
 	}
 }
 
-func runsOf(t *testing.T, pool *pgxpool.Pool, conversation string) []run {
+func segmentsOf(t *testing.T, pool *pgxpool.Pool, conversation string) []segment {
 	t.Helper()
 
 	rows, err := pool.Query(context.Background(), `
-		SELECT run, coalesce(flow, ''), from_sequence, to_sequence, events, outcome
-		FROM conversation_flow_segments WHERE conversation_id = $1 ORDER BY run`, conversation)
+		SELECT segment, coalesce(flow, ''), from_sequence, to_sequence, events, outcome
+		FROM conversation_flow_segments WHERE conversation_id = $1 ORDER BY segment`, conversation)
 	require.NoError(t, err)
 	defer rows.Close()
 
-	var out []run
+	var out []segment
 	for rows.Next() {
-		var r run
-		require.NoError(t, rows.Scan(&r.Run, &r.Flow, &r.From, &r.To, &r.Events, &r.Outcome))
+		var r segment
+		require.NoError(t, rows.Scan(&r.Segment, &r.Flow, &r.From, &r.To, &r.Events, &r.Outcome))
 		out = append(out, r)
 	}
 	require.NoError(t, rows.Err())

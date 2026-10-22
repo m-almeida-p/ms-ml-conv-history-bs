@@ -29,21 +29,21 @@ var (
 	sqlListConversations string
 )
 
-var _ repository.MessageRepository = (*Messages)(nil)
+var _ repository.MessageRepository = (*PostgresMessageRepository)(nil)
 
-// Messages is the Postgres MessageRepository.
-type Messages struct {
+// PostgresMessageRepository is the Postgres MessageRepository.
+type PostgresMessageRepository struct {
 	db postgresql.DB
 }
 
-// NewMessages returns a message reader over db.
-func NewMessages(db postgresql.DB) *Messages {
-	return &Messages{db: db}
+// NewPostgresMessageRepository returns a message reader over db.
+func NewPostgresMessageRepository(db postgresql.DB) *PostgresMessageRepository {
+	return &PostgresMessageRepository{db: db}
 }
 
 // ListMessages implements repository.MessageRepository. It reads one row more
 // than a page, which tells whether more exist without a second query.
-func (r *Messages) ListMessages(ctx context.Context, q domain.PageQuery) (domain.Page, error) {
+func (r *PostgresMessageRepository) ListMessages(ctx context.Context, q domain.PageQuery) (domain.Page, error) {
 	query, args, err := r.pageQuery(ctx, q)
 	if err != nil {
 		return domain.Page{}, err
@@ -80,7 +80,7 @@ func (r *Messages) ListMessages(ctx context.Context, q domain.PageQuery) (domain
 
 // pageQuery chooses the statement and arguments that read the page q asks for.
 // For a page beside a cursor it first checks the cursor.
-func (r *Messages) pageQuery(ctx context.Context, q domain.PageQuery) (string, []any, error) {
+func (r *PostgresMessageRepository) pageQuery(ctx context.Context, q domain.PageQuery) (string, []any, error) {
 	limit := domain.PageSize + 1
 
 	switch q.Direction {
@@ -104,7 +104,7 @@ func (r *Messages) pageQuery(ctx context.Context, q domain.PageQuery) (string, [
 // checkCursor confirms that the cursor is a message of the conversation. One that
 // is not is an unknown conversation when the conversation has no messages, and an
 // invalid cursor otherwise.
-func (r *Messages) checkCursor(ctx context.Context, q domain.PageQuery) error {
+func (r *PostgresMessageRepository) checkCursor(ctx context.Context, q domain.PageQuery) error {
 	var found int
 	err := r.db.QueryRow(ctx, sqlMessageExists, q.ConversationID, q.CursorSequence).Scan(&found)
 	if err == nil {
@@ -137,7 +137,7 @@ func scanMessages(rows pgx.Rows) ([]domain.Message, error) {
 			flow    *string
 		)
 		if err := rows.Scan(&m.ConversationID, &m.Sequence, &role, &m.AuthorID, &m.Type, &m.Text,
-			&m.Truncated, &m.SourceEvent, &account, &flow, &m.ReceivedAt); err != nil {
+			&m.Truncated, &m.EventName, &account, &flow, &m.OccurredAt); err != nil {
 			return nil, dbError("scan message", err)
 		}
 		m.Role, m.IDYapeAccount, m.Flow = domain.Role(role), value(account), value(flow)
@@ -151,7 +151,7 @@ func scanMessages(rows pgx.Rows) ([]domain.Message, error) {
 }
 
 // ListConversations implements repository.MessageRepository.
-func (r *Messages) ListConversations(ctx context.Context, idYapeAccount string) (domain.ConversationList, error) {
+func (r *PostgresMessageRepository) ListConversations(ctx context.Context, idYapeAccount string) (domain.ConversationList, error) {
 	rows, err := r.db.Query(ctx, sqlListConversations, idYapeAccount, domain.ConversationListSize+1)
 	if err != nil {
 		return domain.ConversationList{}, dbError("list conversations", err)
@@ -161,7 +161,7 @@ func (r *Messages) ListConversations(ctx context.Context, idYapeAccount string) 
 	list := domain.ConversationList{Conversations: make([]domain.ConversationSummary, 0, domain.ConversationListSize+1)}
 	for rows.Next() {
 		var c domain.ConversationSummary
-		if err := rows.Scan(&c.ConversationID, &c.MessageCount, &c.FirstReceivedAt, &c.LastReceivedAt); err != nil {
+		if err := rows.Scan(&c.ConversationID, &c.MessageCount, &c.FirstOccurredAt, &c.LastOccurredAt); err != nil {
 			return domain.ConversationList{}, dbError("scan conversation", err)
 		}
 		list.Conversations = append(list.Conversations, c)

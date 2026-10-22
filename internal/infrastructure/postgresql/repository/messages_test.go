@@ -14,7 +14,7 @@ import (
 )
 
 var messageColumns = []string{
-	"conversation_id", "sequence", "role", "author_id", "type", "text", "truncated", "source_event", "id_yape_account", "flow", "received_at",
+	"conversation_id", "sequence", "role", "author_id", "type", "text", "truncated", "event_name", "id_yape_account", "flow", "occurred_at",
 }
 
 var at = time.Date(2026, 10, 20, 14, 0, 0, 0, time.UTC)
@@ -235,7 +235,7 @@ func TestListMessages(t *testing.T) {
 			defer mock.Close()
 			tt.expect(mock)
 
-			page, err := NewMessages(mock).ListMessages(context.Background(), tt.query)
+			page, err := NewPostgresMessageRepository(mock).ListMessages(context.Background(), tt.query)
 
 			switch {
 			case tt.wantErr != nil || tt.wantErrText != "":
@@ -274,19 +274,19 @@ func TestListMessagesFillsEveryField(t *testing.T) {
 		AddRow("conv", 4, "appMaker", "ms-ml-genai-agent-bs", "text", "hola", true, "AgentMessageSent", none, none, at)
 	mock.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 101).WillReturnRows(rows)
 
-	page, err := NewMessages(mock).ListMessages(context.Background(), domain.PageQuery{ConversationID: "conv", Direction: domain.DirectionNewest})
+	page, err := NewPostgresMessageRepository(mock).ListMessages(context.Background(), domain.PageQuery{ConversationID: "conv", Direction: domain.DirectionNewest})
 
 	require.NoError(t, err)
 	require.Len(t, page.Messages, 1)
 	assert.Equal(t, domain.Message{
 		ConversationID: "conv", Sequence: 4, Role: domain.RoleMaker, AuthorID: "ms-ml-genai-agent-bs",
-		Type: "text", Text: "hola", Truncated: true, SourceEvent: "AgentMessageSent", IDYapeAccount: "", ReceivedAt: at,
+		Type: "text", Text: "hola", Truncated: true, EventName: "AgentMessageSent", IDYapeAccount: "", OccurredAt: at,
 	}, page.Messages[0])
 }
 
 func TestListConversations(t *testing.T) {
 	dbDown := errors.New("connection reset")
-	cols := []string{"conversation_id", "message_count", "first_received_at", "last_received_at"}
+	cols := []string{"conversation_id", "message_count", "first_occurred_at", "last_occurred_at"}
 	summaries := func(n int) *pgxmock.Rows {
 		rows := pgxmock.NewRows(cols)
 		for i := range n {
@@ -355,7 +355,7 @@ func TestListConversations(t *testing.T) {
 			defer mock.Close()
 			tt.expect(mock)
 
-			list, err := NewMessages(mock).ListConversations(context.Background(), "acc-1")
+			list, err := NewPostgresMessageRepository(mock).ListConversations(context.Background(), "acc-1")
 
 			if tt.wantErrText != "" {
 				require.Error(t, err)

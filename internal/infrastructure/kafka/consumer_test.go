@@ -21,7 +21,7 @@ import (
 // fakeSource plays the broker: it delivers the messages in order and records the
 // commits and the order of every step in journal.
 type fakeSource struct {
-	messages    []resource.Message
+	messages    []resource.Record
 	consumeErr  error
 	commitErr   error
 	journal     *journal
@@ -29,7 +29,7 @@ type fakeSource struct {
 	onDone      func() // runs after the last record, as the shutdown signal would
 }
 
-func (f *fakeSource) Consume(_ context.Context, handle func(resource.Message) error) error {
+func (f *fakeSource) Consume(_ context.Context, handle func(resource.Record) error) error {
 	for _, m := range f.messages {
 		f.handleError = append(f.handleError, handle(m))
 	}
@@ -40,7 +40,7 @@ func (f *fakeSource) Consume(_ context.Context, handle func(resource.Message) er
 	return f.consumeErr
 }
 
-func (f *fakeSource) Commit(msg resource.Message) error {
+func (f *fakeSource) Commit(msg resource.Record) error {
 	f.journal.add(fmt.Sprintf("commit %d", msg.Offset))
 
 	return f.commitErr
@@ -75,8 +75,8 @@ func (l *recordingLog) Errorf(msg string, v ...any) { l.add("error", msg, v...) 
 
 func (l *recordingLog) text() string { return strings.Join(l.lines, "\n") }
 
-func message(offset int64, value string) resource.Message {
-	return resource.Message{Topic: topic, Partition: 1, Offset: offset, Value: []byte(value)}
+func message(offset int64, value string) resource.Record {
+	return resource.Record{Topic: topic, Partition: 1, Offset: offset, Value: []byte(value)}
 }
 
 func TestConsumerHandle(t *testing.T) {
@@ -242,7 +242,7 @@ func TestConsumerHandle(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			j := &journal{}
 			log := &recordingLog{}
-			src := &fakeSource{messages: []resource.Message{message(41, tt.value)}, commitErr: tt.commitErr, journal: j}
+			src := &fakeSource{messages: []resource.Record{message(41, tt.value)}, commitErr: tt.commitErr, journal: j}
 
 			ingest := mocks.NewProjection(t)
 			calls := 0
@@ -337,7 +337,7 @@ func TestConsumerRun(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			log := &recordingLog{}
 			src := &fakeSource{
-				messages:   []resource.Message{message(1, validBody), message(2, ""), message(3, "{broken")},
+				messages:   []resource.Record{message(1, validBody), message(2, ""), message(3, "{broken")},
 				consumeErr: tt.consumeErr, journal: &journal{},
 			}
 			ingest := mocks.NewProjection(t)

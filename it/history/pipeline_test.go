@@ -16,27 +16,27 @@ import (
 
 // chatRow is the part of a history message the pipeline tests compare.
 type chatRow struct {
-	Sequence    int
-	Role        string
-	Author      string
-	Text        string
-	SourceEvent string
-	Truncated   bool
-	Flow        string
+	Sequence  int
+	Role      string
+	Author    string
+	Text      string
+	EventName string
+	Truncated bool
+	Flow      string
 }
 
 func messagesOf(t *testing.T, pool *pgxpool.Pool, conversationID string) []chatRow {
 	t.Helper()
 
 	rows, err := pool.Query(context.Background(),
-		`SELECT sequence, role, author_id, text, source_event, truncated, COALESCE(flow, '') FROM conversation_messages WHERE conversation_id = $1 ORDER BY sequence`, conversationID)
+		`SELECT sequence, role, author_id, text, event_name, truncated, COALESCE(flow, '') FROM conversation_messages WHERE conversation_id = $1 ORDER BY sequence`, conversationID)
 	require.NoError(t, err)
 	defer rows.Close()
 
 	var out []chatRow
 	for rows.Next() {
 		var r chatRow
-		require.NoError(t, rows.Scan(&r.Sequence, &r.Role, &r.Author, &r.Text, &r.SourceEvent, &r.Truncated, &r.Flow))
+		require.NoError(t, rows.Scan(&r.Sequence, &r.Role, &r.Author, &r.Text, &r.EventName, &r.Truncated, &r.Flow))
 		out = append(out, r)
 	}
 	require.NoError(t, rows.Err())
@@ -121,9 +121,9 @@ func TestPipelineThroughDebezium(t *testing.T) {
 	})
 
 	assert.Equal(t, []chatRow{
-		{Sequence: 2, Role: "appUser", Author: "acc-pipeline", Text: "quiero yapear", SourceEvent: "UserMessageSent"},
-		{Sequence: 4, Role: "appMaker", Author: "ms-ml-genai-agent-bs", Text: "¿A quién y cuánto?", SourceEvent: "AgentMessageSent", Flow: "p2p"},
-		{Sequence: 5, Role: "appMaker", Author: "ms-ml-genai-agent-bs", Text: "No puedo ayudarte con eso", SourceEvent: "GuardrailResponseSent", Flow: "p2p"},
+		{Sequence: 2, Role: "appUser", Author: "acc-pipeline", Text: "quiero yapear", EventName: "UserMessageSent"},
+		{Sequence: 4, Role: "appMaker", Author: "ms-ml-genai-agent-bs", Text: "¿A quién y cuánto?", EventName: "AgentMessageSent", Flow: "p2p"},
+		{Sequence: 5, Role: "appMaker", Author: "ms-ml-genai-agent-bs", Text: "No puedo ayudarte con eso", EventName: "GuardrailResponseSent", Flow: "p2p"},
 	}, messagesOf(t, history, conversation))
 	assert.Equal(t, 6, countWhere(t, history, "conversation_inbox", conversation), "every event is in the inbox, chat or not")
 
@@ -178,8 +178,8 @@ func TestPipelineTopic(t *testing.T) {
 
 		assert.Equal(t, 2, countWhere(t, history, "conversation_inbox", conversation), "one inbox row for the repeated record, one for the marker")
 		assert.Equal(t, []chatRow{
-			{Sequence: 1, Role: "appUser", Author: "acc-pipeline", Text: "hola", SourceEvent: "UserMessageSent"},
-			{Sequence: 2, Role: "appMaker", Author: "ms-ml-genai-agent-bs", Text: "marker", SourceEvent: "AgentMessageSent"},
+			{Sequence: 1, Role: "appUser", Author: "acc-pipeline", Text: "hola", EventName: "UserMessageSent"},
+			{Sequence: 2, Role: "appMaker", Author: "ms-ml-genai-agent-bs", Text: "marker", EventName: "AgentMessageSent"},
 		}, messagesOf(t, history, conversation))
 	})
 
