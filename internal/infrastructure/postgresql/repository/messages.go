@@ -15,17 +15,17 @@ import (
 )
 
 var (
-	//go:embed SQL/message_exists.gotmpl
+	//go:embed SQL/message_exists.sql
 	sqlMessageExists string
-	//go:embed SQL/conversation_exists.gotmpl
+	//go:embed SQL/conversation_exists.sql
 	sqlConversationExists string
-	//go:embed SQL/list_messages_newest.gotmpl
+	//go:embed SQL/list_messages_newest.sql
 	sqlListMessagesNewest string
-	//go:embed SQL/list_messages_before.gotmpl
+	//go:embed SQL/list_messages_before.sql
 	sqlListMessagesBefore string
-	//go:embed SQL/list_messages_after.gotmpl
+	//go:embed SQL/list_messages_after.sql
 	sqlListMessagesAfter string
-	//go:embed SQL/list_conversations.gotmpl
+	//go:embed SQL/list_conversations.sql
 	sqlListConversations string
 )
 
