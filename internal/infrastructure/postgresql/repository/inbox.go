@@ -16,15 +16,15 @@ import (
 )
 
 var (
-	//go:embed SQL/insert_inbox.sql
+	//go:embed SQL/insert_inbox.gotmpl
 	sqlInsertInbox string
-	//go:embed SQL/upsert_message.sql
+	//go:embed SQL/upsert_message.gotmpl
 	sqlUpsertMessage string
-	//go:embed SQL/delete_messages.sql
+	//go:embed SQL/delete_messages.gotmpl
 	sqlDeleteMessages string
-	//go:embed SQL/select_inbox_batch.sql
+	//go:embed SQL/select_inbox_batch.gotmpl
 	sqlSelectInboxBatch string
-	//go:embed SQL/select_inbox_same.sql
+	//go:embed SQL/select_inbox_same.gotmpl
 	sqlSelectInboxSame string
 )
 
