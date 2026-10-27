@@ -39,7 +39,7 @@ only: no Postgres, no connector.
 | 2.6 | Metrics and alerts | The consumer logs its counters when it stops; there is no metrics endpoint and no alert on consumer lag or on the replication slot | Not started |
 | 2.7 | Dead-letter queue | Malformed and rejected records are logged, counted and skipped. Production needs a DLQ to keep them | Known gap |
 | 2.8 | Throughput | The library's loop handles the 3 partitions one record at a time. `internal/core/async/usage_test.go` shows the one-worker-per-partition pattern for when volume asks for it | Known gap |
-| 2.9 | Conversation list | The latest 100 conversations with `hasMore`, no paging. Its cost grows with the account's history (131 buffers for 20,000 messages); a conversations table is the step for accounts with millions | Known gap |
+| 2.9 | Conversation list | Paged with cursors and the `Link` header, like the messages. Each page groups the account's messages, so its cost follows the account's history (422 pages touched, about 3 ms, for 20,000 messages in 5,000 conversations); a conversations table is the step for accounts with millions | Known limit |
 
 ## 3. The agent side
 

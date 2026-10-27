@@ -208,8 +208,13 @@ and a cancelled run changes nothing. The inbox is never modified.
 
 ## API
 
-Shaped after the Smooch (Sunshine Conversations) v2 list-messages call.
+Shaped after the Smooch (Sunshine Conversations) v2 list-messages call. The body holds the data only; the way to
+another page is the `Link` header (RFC 8288).
 
+```http
+HTTP/1.1 200 OK
+Link: </v1/conversations/conv_v1_8ab59029-bc3c-4e77-b49f-9fb053d90c52/messages?page[before]=2>; rel="prev"
+```
 ```json
 {
   "conversation": { "_id": "conv_v1_8ab59029-bc3c-4e77-b49f-9fb053d90c52" },
@@ -217,9 +222,7 @@ Shaped after the Smooch (Sunshine Conversations) v2 list-messages call.
     { "_id": "2", "type": "text", "role": "appUser", "authorId": "<idYapeAccount>", "text": "quiero yapear",
       "received": 1792505243.792, "source": { "type": "api" },
       "metadata": { "sequence": 2, "eventName": "UserMessageSent", "truncated": false, "flow": "p2p" } }
-  ],
-  "meta": { "hasMore": true, "beforeCursor": "2", "afterCursor": "11" },
-  "links": { "prev": "/v1/conversations/conv_v1_.../messages?page[before]=2" }
+  ]
 }
 ```
 
@@ -236,7 +239,7 @@ Left out: `name`, `avatarUrl`, `actions`, `items`, `mediaUrl`, `quotedMessage`, 
 ### Paging
 
 The cursor is a message `_id`, as in Smooch. The server finds it with
-`WHERE conversation_id = $1 AND sequence = $2`, which proves the cursor is a message of the conversation. The sequence is the cursor, and `sequence < $2` or `> $2` picks the page. A page is 100 messages.
+`WHERE conversation_id = $1 AND sequence = $2`, which proves the cursor is a message of the conversation. The sequence is the cursor, and `sequence < $2` or `> $2` picks the page. A page is 100 messages, or `page[size]` when the client asks for fewer (1 to 100).
 
 ```mermaid
 flowchart TD
@@ -254,28 +257,80 @@ flowchart TD
     N --> P
 ```
 
-| Request | `hasMore` means | Link |
-|---------|-----------------|------|
-| no cursor, or `page[before]` | older messages exist | `links.prev` = `page[before]=<first _id>` |
-| `page[after]` | newer messages exist | `links.next` = `page[after]=<last _id>` |
+| Request | `Link` header | Meaning |
+|---------|--------------|---------|
+| no cursor, or `page[before]` | `<...?page[before]=<first _id>>; rel="prev"` | older messages exist |
+| `page[after]` | `<...?page[after]=<last _id>>; rel="next"` | newer messages exist |
 
-A link is present only when there is more in the direction of travel. A page past the last message
-is `messages: []` with no cursors. `beforeCursor` is the first message of the page, `afterCursor` the
-last. The store reads 101 rows and trims one, so `hasMore` costs no second query.
+The header is present only when there is more in the direction of travel; the last page has none, so a client
+walks until the header stops. When the page size is not 100 the link repeats `&page[size]=<n>`, so following links keeps
+the size the client chose. A page past the last message is `messages: []` with no header. The first and the last
+`_id` of a page are the `_id` of its first and last message, so the body needs no cursor fields. The store reads
+one row more than the page size and trims it, so knowing that there is more costs no second query.
+
+What a page costs follows its size, not its position or the size of the table. `it/history/paging_volume_test.go` loads 400,000
+messages, one conversation of 60,000 among them, and reads the query plans:
+
+| Page | Rows read | Pages touched | Execution |
+|------|-----------|---------------|-----------|
+| size 1, newest | 2 | 4 | 0.03 ms |
+| size 10 | 11 | 4 | 0.02 ms |
+| size 50 | 51 | 6 | 0.02 ms |
+| size 100 | 101 | 8 | 0.02 ms |
+| size 1 or 100, `page[before]` near the end, the middle or the start | size + 1 | 4 / 8 to 9 | 0.02 ms |
+
+A page reads one row more than its size, the plan has no sequential scan and no sort, and the pages touched do not change with the
+depth of the cursor. Walking the whole 60,000-message conversation takes 600 calls at size 100 (0.47 s, median 0.6 ms a call)
+and 1,200 at size 50 (2.1 s). The test asserts the rows and the pages, which do not depend on the machine; the time ceilings are far above a run.
 
 A conversation is known when it has chat messages; a conversation of tool events alone answers `404`.
-The conversation list returns the latest 100 with `meta.hasMore` and has no paging. It reads the
-account's messages through `conversation_messages_account_idx (id_yape_account, occurred_at DESC)`, so its
-cost grows with the account's history: an account with 80 messages touches 13 buffers and one with 20,000
-messages in 500 conversations touches 131 and answers in under 4 ms (measured on 400,000 messages). A
-covering index `(id_yape_account, conversation_id, occurred_at DESC)` gave an index-only scan, but not
-fewer buffers on the heavy account, so the index stays as it is. The step after that, when a single
-account reaches millions of messages, is a conversations table.
+### Paging the conversation list
+
+`GET /v1/conversations?idYapeAccount=` pages the same way as the messages, so a client that can walk one can walk the other.
+The body holds the conversations only, most recent first inside a page; the way to another page is the `Link` header.
+
+```http
+GET /v1/conversations?idYapeAccount=acc-1&page[size]=2
+HTTP/1.1 200 OK
+Link: </v1/conversations?idYapeAccount=acc-1&page[before]=conv_v1_b&page[size]=2>; rel="prev"
+```
+```json
+{ "conversations": [
+  { "_id": "conv_v1_a", "messageCount": 5, "firstReceived": 1792505243.5, "lastReceived": 1792505543.5 },
+  { "_id": "conv_v1_b", "messageCount": 1, "firstReceived": 1792505243.5, "lastReceived": 1792505243.5 } ] }
+```
+
+| Request | Returns | `Link` header |
+|---------|---------|---------------|
+| no cursor | the most recent conversations | `rel="prev"` = `page[before]=<oldest _id of the page>` when older ones exist |
+| `page[before]=X` | the conversations just older than `X` (less recently active) | `rel="prev"`, same rule |
+| `page[after]=X` | the conversations just more recent than `X` | `rel="next"` = `page[after]=<most recent _id of the page>` when more recent ones exist |
+
+`before` and `after` mean what they mean for messages: older and newer in time. `page[size]` is 1 to 100 (default 100) and is repeated in the link when it is not 100. The
+cursor is a conversation `_id`; the server finds it among the account's own conversations, so an `_id` of another account, an unknown one, an empty one or one with
+characters outside `. _ : -`, letters and digits answers `400 invalid_cursor`. A page past the last conversation is `conversations: []` with no header; an account with
+none gets the same. The last page has no `Link` header.
+
+A page is cut by the time of a conversation's last message, with the conversation `_id` as the tie-break (`ORDER BY max(occurred_at) DESC, conversation_id`), so
+conversations that end at the same instant keep one order and no page repeats or skips one. A conversation that receives a message while a client is paging moves to the most
+recent end, so it does not appear again in the older pages; the client already has it and keeps the `_id`.
+
+It reads the account's messages through `conversation_messages_account_idx (id_yape_account, occurred_at DESC)` and groups them, so a page costs what the account's history
+costs, not what the page size or the table costs. `it/history/paging_volume_test.go` loads one account with 5,000 conversations (20,000 messages) among 400,000 messages:
+
+| Page | Rows read | Pages touched | Execution |
+|------|-----------|---------------|-----------|
+| most recent, size 1, 10 or 100 | 20,000 (the account's) | 422 of 4,966 | 2.7 to 4 ms |
+| `page[before]` or `page[after]`, size 100 | 20,000 | 422 | 2.9 ms |
+
+Walking all 5,000 conversations takes 50 calls at size 100 (0.19 s, median 3.7 ms a call). The plan has no sequential scan and reads no other account's messages. A
+covering index `(id_yape_account, conversation_id, occurred_at DESC)` gave an index-only scan, but not fewer buffers on the heavy account, so the index stays as it is. The
+step after that, when a single account reaches millions of messages, is a conversations table.
 
 | Status | Code | When |
 |--------|------|------|
-| 400 | `invalid_request` | malformed conversation id or account, both cursors, no account |
-| 400 | `invalid_cursor` | not a plain decimal `_id`, or not a message of that conversation |
+| 400 | `invalid_request` | malformed conversation id or account, both cursors, no account, a bad or repeated `page[size]`, a cursor sent twice |
+| 400 | `invalid_cursor` | messages: not a plain decimal `_id`, or not a message of that conversation. Conversations: empty, malformed, or not a conversation of that account |
 | 404 | `not_found` | no chat messages for that conversation, or an unknown route |
 | 500 | `internal_error` | store error; the cause goes to the log only |
 
@@ -338,9 +393,10 @@ number that does not parse (`SERVER_PORT=abc`) fails the load with the field typ
 |------|--------|
 | `page[before]=` or `page[after]=` sent empty | `400 invalid_cursor` |
 | An empty cursor beside a real one | `400 invalid_request` (two cursors) |
-| `page[before]`, `page[after]` or `idYapeAccount` sent twice | `400 invalid_request` |
+| `page[before]`, `page[after]`, `page[size]` or `idYapeAccount` sent twice (either route) | `400 invalid_request` |
 | A cursor with a sign, spaces, leading zeros, an exponent or a NUL | `400 invalid_cursor` |
-| `page[size]` or any unknown parameter | ignored: a page is always 100 |
+| `page[size]` outside 1 to 100, empty, or not a plain decimal (`+5`, `05`, `ten`) | `400 invalid_request` |
+| Any unknown parameter | ignored |
 
 ## Privacy
 

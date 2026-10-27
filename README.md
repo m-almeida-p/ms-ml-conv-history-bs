@@ -59,14 +59,15 @@ and the connector registered from `../ms-ml-genai-agents-bs/local/debezium/regis
 ```bash
 curl -s "localhost:3100/v1/conversations?idYapeAccount=<account>"
 curl -s "localhost:3100/v1/conversations/<conversationId>/messages"
-curl -sg "localhost:3100/v1/conversations/<conversationId>/messages?page[before]=<_id>"
+curl -sg "localhost:3100/v1/conversations/<conversationId>/messages?page[before]=<_id>&page[size]=20"
+curl -sg "localhost:3100/v1/conversations?idYapeAccount=<account>&page[before]=<conversationId>"
 curl -s  localhost:3100/health
 ```
 
 | Route | Answer |
 |-------|--------|
-| `GET /v1/conversations/{conversationId}/messages` | up to 100 messages, oldest first; `page[before]` or `page[after]` (one at most) take a message `_id` |
-| `GET /v1/conversations?idYapeAccount=` | the account's latest 100 conversations with chat messages, newest first |
+| `GET /v1/conversations/{conversationId}/messages` | up to 100 messages, oldest first; `page[before]` or `page[after]` (one at most) take a message `_id`, `page[size]` asks for fewer; more pages are announced in the `Link` header |
+| `GET /v1/conversations?idYapeAccount=&page[before]=&page[after]=&page[size]=` | a page of the account's conversations with chat messages, most recent first; more pages are announced in the `Link` header |
 | `GET /health` | `200` when the database answers, `503` otherwise |
 
 The contract is `docs/ms-ml-conv-history-bs-openapi.yml` (Swagger 2.0), generated from the swag annotations
