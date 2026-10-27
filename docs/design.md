@@ -244,15 +244,15 @@ The cursor is a message `_id`, as in Smooch. The server finds it with
 ```mermaid
 flowchart TD
     R["Request"] --> B{"Both page[before]<br/>and page[after]?"}
-    B -->|"yes"| E400["400 invalid_request"]
+    B -->|"yes"| E400["400 invalid-request"]
     B -->|"no"| Q{"Which cursor?"}
     Q -->|"none"| N["Newest 100"]
     Q -->|"before"| O["The 100 just older"]
     Q -->|"after"| W["The 100 just newer"]
     O --> F{"Is the cursor a message<br/>of this conversation?"}
     W --> F
-    F -->|"no, conversation unknown"| E404["404 not_found"]
-    F -->|"no"| E400C["400 invalid_cursor"]
+    F -->|"no, conversation unknown"| E404["404 conversation-not-found"]
+    F -->|"no"| E400C["400 invalid-cursor"]
     F -->|"yes"| P["Page oldest first"]
     N --> P
 ```
@@ -308,7 +308,7 @@ Link: </v1/conversations?idYapeAccount=acc-1&page[before]=conv_v1_b&page[size]=2
 
 `before` and `after` mean what they mean for messages: older and newer in time. `page[size]` is 1 to 100 (default 100) and is repeated in the link when it is not 100. The
 cursor is a conversation `_id`; the server finds it among the account's own conversations, so an `_id` of another account, an unknown one, an empty one or one with
-characters outside `. _ : -`, letters and digits answers `400 invalid_cursor`. A page past the last conversation is `conversations: []` with no header; an account with
+characters outside `. _ : -`, letters and digits answers `400 invalid-cursor`. A page past the last conversation is `conversations: []` with no header; an account with
 none gets the same. The last page has no `Link` header.
 
 A page is cut by the time of a conversation's last message, with the conversation `_id` as the tie-break (`ORDER BY max(occurred_at) DESC, conversation_id`), so
@@ -327,14 +327,52 @@ Walking all 5,000 conversations takes 50 calls at size 100 (0.19 s, median 3.7 m
 covering index `(id_yape_account, conversation_id, occurred_at DESC)` gave an index-only scan, but not fewer buffers on the heavy account, so the index stays as it is. The
 step after that, when a single account reaches millions of messages, is a conversations table.
 
-| Status | Code | When |
-|--------|------|------|
-| 400 | `invalid_request` | malformed conversation id or account, both cursors, no account, a bad or repeated `page[size]`, a cursor sent twice |
-| 400 | `invalid_cursor` | messages: not a plain decimal `_id`, or not a message of that conversation. Conversations: empty, malformed, or not a conversation of that account |
-| 404 | `not_found` | no chat messages for that conversation, or an unknown route |
-| 500 | `internal_error` | store error; the cause goes to the log only |
+### Errors
 
-Error bodies are `{"error": {"code": ..., "description": ...}}` and never repeat the request.
+Every error is a problem details object ([RFC 9457](https://www.rfc-editor.org/info/rfc9457/)) served as `application/problem+json`.
+
+```http
+HTTP/1.1 400 Bad Request
+Content-Type: application/problem+json
+```
+```json
+{
+  "type": "tag:yape.com.pe,2026:conversation-history:invalid-cursor",
+  "title": "Invalid cursor",
+  "status": 400,
+  "detail": "page[before] or page[after] is not the _id of a message in this conversation."
+}
+```
+
+| Member | Meaning |
+|--------|---------|
+| `type` | The problem type, a URI and its primary identifier. A client decides what to do from `type`. |
+| `title` | A short summary of the type. It does not change from one occurrence to the next; for `about:blank` it is the HTTP status phrase. |
+| `status` | The HTTP status of the response, repeated. |
+| `detail` | An explanation of this occurrence, for people. A client does not parse it. |
+
+There is no `instance` and there are no extension members: an occurrence identifier would have to point at the request, and a reply never repeats the request
+(the account, a cursor or a conversation id), so `detail` says what is wrong and never with which value.
+
+The problem types, under `tag:yape.com.pe,2026:conversation-history:`:
+
+| Type | Status | Title | When |
+|------|--------|-------|------|
+| `invalid-request` | 400 | Invalid request | malformed conversation id or account, both cursors, no account, a bad or repeated `page[size]`, a parameter sent twice, a request Echo cannot read |
+| `invalid-cursor` | 400 | Invalid cursor | messages: not a plain decimal `_id`, or not a message of that conversation. Conversations: empty, malformed, or not a conversation of that account |
+| `conversation-not-found` | 404 | Conversation not found | no chat messages for that conversation |
+| `about:blank` | 404 | Not Found | an unknown route |
+| `about:blank` | 405 | Method Not Allowed | a method the route does not accept |
+| `about:blank` | 500 | Internal Server Error | store error; the cause goes to the log only, `detail` is a fixed sentence |
+
+In code the domain has three sentinel errors, `ErrInvalidRequest`, `ErrInvalidCursor` and `ErrNotFound`, and the handler picks the problem type with `errors.Is`. An invalid
+request carries its words in a typed error, `domain.InvalidRequest(format, args...)` (an `*InvalidRequestError`), which still matches `ErrInvalidRequest`; the handler reads
+`detail` from it with `errors.As`, through any context wrapped around it, and never from the text of the error. An error that matches the sentinel but carries no
+words gets the fixed sentence "The request is invalid.", and a cause that is none of the three is a 500 with a fixed sentence.
+
+The types are tag URIs ([RFC 4151](https://www.rfc-editor.org/info/rfc4151/)): absolute and stable, and valid without a website. RFC 9457 allows a type that does not resolve, so
+this table is where a type is documented. A client does not dereference them. A type keeps its meaning for good; a new kind of problem gets a new type, and a status
+that means nothing more than itself uses `about:blank`.
 
 ## OpenAPI
 
@@ -391,11 +429,11 @@ number that does not parse (`SERVER_PORT=abc`) fails the load with the field typ
 
 | Case | Answer |
 |------|--------|
-| `page[before]=` or `page[after]=` sent empty | `400 invalid_cursor` |
-| An empty cursor beside a real one | `400 invalid_request` (two cursors) |
-| `page[before]`, `page[after]`, `page[size]` or `idYapeAccount` sent twice (either route) | `400 invalid_request` |
-| A cursor with a sign, spaces, leading zeros, an exponent or a NUL | `400 invalid_cursor` |
-| `page[size]` outside 1 to 100, empty, or not a plain decimal (`+5`, `05`, `ten`) | `400 invalid_request` |
+| `page[before]=` or `page[after]=` sent empty | `400 invalid-cursor` |
+| An empty cursor beside a real one | `400 invalid-request` (two cursors) |
+| `page[before]`, `page[after]`, `page[size]` or `idYapeAccount` sent twice (either route) | `400 invalid-request` |
+| A cursor with a sign, spaces, leading zeros, an exponent or a NUL | `400 invalid-cursor` |
+| `page[size]` outside 1 to 100, empty, or not a plain decimal (`+5`, `05`, `ten`) | `400 invalid-request` |
 | Any unknown parameter | ignored |
 
 ## Privacy
