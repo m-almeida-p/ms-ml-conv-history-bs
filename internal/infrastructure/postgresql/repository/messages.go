@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -27,6 +28,12 @@ var (
 	sqlListMessagesAfter string
 	//go:embed SQL/list_conversations.sql
 	sqlListConversations string
+	//go:embed SQL/list_conversations_before.sql
+	sqlListConversationsBefore string
+	//go:embed SQL/list_conversations_after.sql
+	sqlListConversationsAfter string
+	//go:embed SQL/conversation_cursor.sql
+	sqlConversationCursor string
 )
 
 var _ repository.MessageRepository = (*PostgresMessageRepository)(nil)
@@ -44,6 +51,10 @@ func NewPostgresMessageRepository(db postgresql.DB) *PostgresMessageRepository {
 // ListMessages implements repository.MessageRepository. It reads one row more
 // than a page, which tells whether more exist without a second query.
 func (r *PostgresMessageRepository) ListMessages(ctx context.Context, q domain.PageQuery) (domain.Page, error) {
+	if q.Size < 1 || q.Size > domain.PageSize {
+		return domain.Page{}, fmt.Errorf("%w: the page size must be from 1 to %d", domain.ErrInvalidRequest, domain.PageSize)
+	}
+
 	query, args, err := r.pageQuery(ctx, q)
 	if err != nil {
 		return domain.Page{}, err
@@ -66,9 +77,9 @@ func (r *PostgresMessageRepository) ListMessages(ctx context.Context, q domain.P
 		return domain.Page{}, domain.ErrNotFound
 	}
 
-	hasMore := len(messages) > domain.PageSize
+	hasMore := len(messages) > q.Size
 	if hasMore {
-		messages = messages[:domain.PageSize]
+		messages = messages[:q.Size]
 	}
 	// Backwards reads come newest first; a page always reads oldest to newest.
 	if q.Direction != domain.DirectionAfter {
@@ -81,7 +92,7 @@ func (r *PostgresMessageRepository) ListMessages(ctx context.Context, q domain.P
 // pageQuery chooses the statement and arguments that read the page q asks for.
 // For a page beside a cursor it first checks the cursor.
 func (r *PostgresMessageRepository) pageQuery(ctx context.Context, q domain.PageQuery) (string, []any, error) {
-	limit := domain.PageSize + 1
+	limit := q.Size + 1
 
 	switch q.Direction {
 	case domain.DirectionNewest:
@@ -150,15 +161,27 @@ func scanMessages(rows pgx.Rows) ([]domain.Message, error) {
 	return messages, nil
 }
 
-// ListConversations implements repository.MessageRepository.
-func (r *PostgresMessageRepository) ListConversations(ctx context.Context, idYapeAccount string) (domain.ConversationList, error) {
-	rows, err := r.db.Query(ctx, sqlListConversations, idYapeAccount, domain.ConversationListSize+1)
+// ListConversations implements repository.MessageRepository. Like ListMessages, it reads
+// one row more than a page, which tells whether more exist without a second query. A page
+// beside a cursor is cut by the time of the cursor conversation's last message, with the
+// conversation id as the tie-break, so the pages never overlap.
+func (r *PostgresMessageRepository) ListConversations(ctx context.Context, q domain.ConversationQuery) (domain.ConversationList, error) {
+	if q.Size < 1 || q.Size > domain.ConversationListSize {
+		return domain.ConversationList{}, fmt.Errorf("%w: the page size must be from 1 to %d", domain.ErrInvalidRequest, domain.ConversationListSize)
+	}
+
+	query, args, err := r.conversationsQuery(ctx, q)
+	if err != nil {
+		return domain.ConversationList{}, err
+	}
+
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return domain.ConversationList{}, dbError("list conversations", err)
 	}
 	defer rows.Close()
 
-	list := domain.ConversationList{Conversations: make([]domain.ConversationSummary, 0, domain.ConversationListSize+1)}
+	list := domain.ConversationList{Conversations: make([]domain.ConversationSummary, 0, q.Size+1)}
 	for rows.Next() {
 		var c domain.ConversationSummary
 		if err := rows.Scan(&c.ConversationID, &c.MessageCount, &c.FirstOccurredAt, &c.LastOccurredAt); err != nil {
@@ -170,10 +193,42 @@ func (r *PostgresMessageRepository) ListConversations(ctx context.Context, idYap
 		return domain.ConversationList{}, dbError("list conversations", err)
 	}
 
-	list.HasMore = len(list.Conversations) > domain.ConversationListSize
+	list.HasMore = len(list.Conversations) > q.Size
 	if list.HasMore {
-		list.Conversations = list.Conversations[:domain.ConversationListSize]
+		list.Conversations = list.Conversations[:q.Size]
+	}
+	// A page after a cursor is read upwards from it, nearest first; a list is most recent first.
+	if q.Direction == domain.DirectionAfter {
+		slices.Reverse(list.Conversations)
 	}
 
 	return list, nil
+}
+
+// conversationsQuery chooses the statement and arguments that read the page q asks for.
+// For a page beside a cursor it first finds the cursor conversation among the account's.
+func (r *PostgresMessageRepository) conversationsQuery(ctx context.Context, q domain.ConversationQuery) (string, []any, error) {
+	limit := q.Size + 1
+
+	switch q.Direction {
+	case domain.DirectionNewest:
+		return sqlListConversations, []any{q.IDYapeAccount, limit}, nil
+	case domain.DirectionBefore, domain.DirectionAfter:
+		var lastOccurredAt time.Time
+		err := r.db.QueryRow(ctx, sqlConversationCursor, q.IDYapeAccount, q.CursorID).Scan(&lastOccurredAt)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", nil, domain.ErrInvalidCursor
+		}
+		if err != nil {
+			return "", nil, dbError("find conversation cursor", err)
+		}
+		query := sqlListConversationsAfter
+		if q.Direction == domain.DirectionBefore {
+			query = sqlListConversationsBefore
+		}
+
+		return query, []any{q.IDYapeAccount, lastOccurredAt, q.CursorID, limit}, nil
+	}
+
+	return "", nil, fmt.Errorf("%w: unknown direction %q", domain.ErrInvalidRequest, q.Direction)
 }

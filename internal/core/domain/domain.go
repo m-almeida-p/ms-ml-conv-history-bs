@@ -130,7 +130,8 @@ type RebuildResult struct {
 	Invalid int
 }
 
-// PageSize is how many messages one page holds.
+// PageSize is how many messages a page holds when the client does not ask for
+// fewer. It is also the most a client can ask for.
 const PageSize = 100
 
 // Direction says which way a page of messages is read, relative to a cursor.
@@ -156,14 +157,16 @@ var (
 )
 
 // PageQuery asks for one page of a conversation. CursorSequence is the sequence
-// of a message of that conversation, and is ignored for DirectionNewest.
+// of a message of that conversation, and is ignored for DirectionNewest. Size is
+// how many messages to return, from 1 to PageSize.
 type PageQuery struct {
 	ConversationID string
 	Direction      Direction
 	CursorSequence int
+	Size           int
 }
 
-// Page is what the store returns: up to PageSize messages in ascending order of
+// Page is what the store returns: up to Size messages in ascending order of
 // sequence, and whether more exist in the direction that was read.
 type Page struct {
 	Messages []Message
@@ -174,7 +177,9 @@ type Page struct {
 type MessagePage struct {
 	ConversationID string
 	Direction      Direction
-	Messages       []Message
+	// Size is the page size the read used: the one the client asked for, or PageSize.
+	Size     int
+	Messages []Message
 	// HasMore is true when older messages exist (newest and before) or newer ones
 	// exist (after): the direction the caller is walking.
 	HasMore bool
@@ -192,11 +197,35 @@ type ConversationSummary struct {
 	LastOccurredAt  time.Time
 }
 
-// ConversationList is the most recent conversations of an account.
-type ConversationList struct {
-	Conversations []ConversationSummary
-	HasMore       bool
+// ConversationQuery asks for one page of an account's conversations. CursorID is
+// the id of a conversation of that account and is ignored for DirectionNewest.
+// Before reads the conversations older than the cursor (less recently active),
+// After the ones more recently active. Size is how many to return, from 1 to
+// ConversationListSize.
+type ConversationQuery struct {
+	IDYapeAccount string
+	Direction     Direction
+	CursorID      string
+	Size          int
 }
 
-// ConversationListSize is how many conversations one list holds.
+// ConversationList is one page of an account's conversations, the most recent
+// first, with the cursors that continue it.
+type ConversationList struct {
+	Direction Direction
+	// Size is the page size the read used: the one the client asked for, or ConversationListSize.
+	Size          int
+	Conversations []ConversationSummary
+	// HasMore is true when older conversations exist (newest and before pages) or more
+	// recent ones exist (after pages): the direction the caller is walking.
+	HasMore bool
+	// BeforeCursor is the id of the oldest conversation of the page, the one that
+	// continues backwards; AfterCursor is the id of the most recent one, the one that
+	// continues forwards. Both are empty for an empty page.
+	BeforeCursor string
+	AfterCursor  string
+}
+
+// ConversationListSize is how many conversations a page holds when the client does
+// not ask for fewer. It is also the most a client can ask for.
 const ConversationListSize = 100

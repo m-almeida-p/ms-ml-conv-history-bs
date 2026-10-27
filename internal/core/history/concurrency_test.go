@@ -17,11 +17,11 @@ import (
 // the answers they give one at a time. Run with -race.
 func TestServiceAnswersTheSameWhenCalledAtOnce(t *testing.T) {
 	repo := mocks.NewMessageRepository(t)
-	repo.On("ListMessages", mock.Anything, domain.PageQuery{ConversationID: "conv", Direction: domain.DirectionNewest}).
+	repo.On("ListMessages", mock.Anything, domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionNewest}).
 		Return(domain.Page{Messages: messagesAt(7, 8, 9), HasMore: true}, nil).Maybe()
-	repo.On("ListMessages", mock.Anything, domain.PageQuery{ConversationID: "conv", Direction: domain.DirectionBefore, CursorSequence: 7}).
+	repo.On("ListMessages", mock.Anything, domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionBefore, CursorSequence: 7}).
 		Return(domain.Page{Messages: messagesAt(5, 6)}, nil).Maybe()
-	repo.On("ListConversations", mock.Anything, "acc").
+	repo.On("ListConversations", mock.Anything, domain.ConversationQuery{IDYapeAccount: "acc", Direction: domain.DirectionNewest, Size: domain.ConversationListSize}).
 		Return(domain.ConversationList{Conversations: []domain.ConversationSummary{{ConversationID: "conv", MessageCount: 3}}}, nil).Maybe()
 	svc := NewService(repo)
 
@@ -41,7 +41,7 @@ func TestServiceAnswersTheSameWhenCalledAtOnce(t *testing.T) {
 	scenario := func(exec concurrent.Executor) []reply {
 		return concurrent.Collect(exec, 60, func(i int) reply {
 			if i%6 == 5 {
-				list, err := svc.Conversations(context.Background(), "acc")
+				list, err := svc.Conversations(context.Background(), service.ConversationsRequest{IDYapeAccount: "acc"})
 
 				return reply{List: list, Err: errText(err)}
 			}

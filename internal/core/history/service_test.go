@@ -40,47 +40,102 @@ func TestMessages(t *testing.T) {
 		{
 			name:      "noCursorAsksForTheNewestPage",
 			req:       service.MessagesRequest{ConversationID: "conv_v1_a"},
-			wantQuery: &domain.PageQuery{ConversationID: "conv_v1_a", Direction: domain.DirectionNewest},
+			wantQuery: &domain.PageQuery{Size: domain.PageSize, ConversationID: "conv_v1_a", Direction: domain.DirectionNewest},
 			page:      domain.Page{Messages: messagesAt(42, 43, 44), HasMore: true},
 			want: domain.MessagePage{
-				ConversationID: "conv_v1_a", Direction: domain.DirectionNewest, Messages: messagesAt(42, 43, 44),
+				Size: domain.PageSize, ConversationID: "conv_v1_a", Direction: domain.DirectionNewest, Messages: messagesAt(42, 43, 44),
 				HasMore: true, BeforeCursor: "42", AfterCursor: "44",
 			},
 		},
 		{
 			name:      "beforeAsksForOlderMessages",
 			req:       service.MessagesRequest{ConversationID: "conv", Before: ptr("42")},
-			wantQuery: &domain.PageQuery{ConversationID: "conv", Direction: domain.DirectionBefore, CursorSequence: 42},
+			wantQuery: &domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionBefore, CursorSequence: 42},
 			page:      domain.Page{Messages: messagesAt(30, 31)},
 			want: domain.MessagePage{
-				ConversationID: "conv", Direction: domain.DirectionBefore, Messages: messagesAt(30, 31),
+				Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionBefore, Messages: messagesAt(30, 31),
 				BeforeCursor: "30", AfterCursor: "31",
 			},
 		},
 		{
 			name:      "afterAsksForNewerMessages",
 			req:       service.MessagesRequest{ConversationID: "conv", After: ptr("7")},
-			wantQuery: &domain.PageQuery{ConversationID: "conv", Direction: domain.DirectionAfter, CursorSequence: 7},
+			wantQuery: &domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionAfter, CursorSequence: 7},
 			page:      domain.Page{Messages: messagesAt(8), HasMore: true},
 			want: domain.MessagePage{
-				ConversationID: "conv", Direction: domain.DirectionAfter, Messages: messagesAt(8),
+				Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionAfter, Messages: messagesAt(8),
 				HasMore: true, BeforeCursor: "8", AfterCursor: "8",
 			},
 		},
 		{
 			name:      "emptyPageHasNoCursors",
 			req:       service.MessagesRequest{ConversationID: "conv", After: ptr("9")},
-			wantQuery: &domain.PageQuery{ConversationID: "conv", Direction: domain.DirectionAfter, CursorSequence: 9},
+			wantQuery: &domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionAfter, CursorSequence: 9},
 			page:      domain.Page{},
-			want:      domain.MessagePage{ConversationID: "conv", Direction: domain.DirectionAfter},
+			want:      domain.MessagePage{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionAfter},
 		},
 		{
 			name:      "cursorsAreTheLargestSequenceToo",
 			req:       service.MessagesRequest{ConversationID: "conv", Before: ptr("2147483647")},
-			wantQuery: &domain.PageQuery{ConversationID: "conv", Direction: domain.DirectionBefore, CursorSequence: 2147483647},
+			wantQuery: &domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionBefore, CursorSequence: 2147483647},
 			page:      domain.Page{Messages: messagesAt(1)},
-			want:      domain.MessagePage{ConversationID: "conv", Direction: domain.DirectionBefore, Messages: messagesAt(1), BeforeCursor: "1", AfterCursor: "1"},
+			want:      domain.MessagePage{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionBefore, Messages: messagesAt(1), BeforeCursor: "1", AfterCursor: "1"},
 		},
+		{
+			name:      "pageSizeAsksForFewerMessages",
+			req:       service.MessagesRequest{ConversationID: "conv", Size: ptr("5")},
+			wantQuery: &domain.PageQuery{ConversationID: "conv", Direction: domain.DirectionNewest, Size: 5},
+			page:      domain.Page{Messages: messagesAt(8, 9), HasMore: true},
+			want: domain.MessagePage{
+				ConversationID: "conv", Direction: domain.DirectionNewest, Size: 5, Messages: messagesAt(8, 9),
+				HasMore: true, BeforeCursor: "8", AfterCursor: "9",
+			},
+		},
+		{
+			name:      "pageSizeTravelsWithACursor",
+			req:       service.MessagesRequest{ConversationID: "conv", Before: ptr("42"), Size: ptr("1")},
+			wantQuery: &domain.PageQuery{ConversationID: "conv", Direction: domain.DirectionBefore, CursorSequence: 42, Size: 1},
+			page:      domain.Page{Messages: messagesAt(41), HasMore: true},
+			want: domain.MessagePage{
+				ConversationID: "conv", Direction: domain.DirectionBefore, Size: 1, Messages: messagesAt(41),
+				HasMore: true, BeforeCursor: "41", AfterCursor: "41",
+			},
+		},
+		{
+			name:      "pageSizeAtTheMaximumIsAccepted",
+			req:       service.MessagesRequest{ConversationID: "conv", Size: ptr("100")},
+			wantQuery: &domain.PageQuery{ConversationID: "conv", Direction: domain.DirectionNewest, Size: 100},
+			page:      domain.Page{Messages: messagesAt(1)},
+			want:      domain.MessagePage{ConversationID: "conv", Direction: domain.DirectionNewest, Size: 100, Messages: messagesAt(1), BeforeCursor: "1", AfterCursor: "1"},
+		},
+		{name: "pageSizeEmpty", req: service.MessagesRequest{ConversationID: "conv", Size: ptr("")}, wantErr: domain.ErrInvalidRequest, wantErrText: "page[size]"},
+		{name: "pageSizeZero", req: service.MessagesRequest{ConversationID: "conv", Size: ptr("0")}, wantErr: domain.ErrInvalidRequest, wantErrText: "page[size]"},
+		{name: "pageSizeNegative", req: service.MessagesRequest{ConversationID: "conv", Size: ptr("-1")}, wantErr: domain.ErrInvalidRequest, wantErrText: "page[size]"},
+		{name: "pageSizeOverTheMaximum", req: service.MessagesRequest{ConversationID: "conv", Size: ptr("101")}, wantErr: domain.ErrInvalidRequest, wantErrText: "page[size]"},
+		{name: "pageSizeNotANumber", req: service.MessagesRequest{ConversationID: "conv", Size: ptr("ten")}, wantErr: domain.ErrInvalidRequest, wantErrText: "page[size]"},
+		{name: "pageSizeWithAPlusSign", req: service.MessagesRequest{ConversationID: "conv", Size: ptr("+5")}, wantErr: domain.ErrInvalidRequest, wantErrText: "page[size]"},
+		{name: "pageSizeWithLeadingZeros", req: service.MessagesRequest{ConversationID: "conv", Size: ptr("05")}, wantErr: domain.ErrInvalidRequest, wantErrText: "page[size]"},
+		{name: "pageSizeBeyondAnInt64", req: service.MessagesRequest{ConversationID: "conv", Size: ptr("9223372036854775808")}, wantErr: domain.ErrInvalidRequest, wantErrText: "page[size]"},
+		{name: "pageSizeWithASpaceBefore", req: service.MessagesRequest{ConversationID: "conv", Size: ptr(" 5")}, wantErr: domain.ErrInvalidRequest, wantErrText: "page[size]"},
+		{name: "pageSizeWithASpaceAfter", req: service.MessagesRequest{ConversationID: "conv", Size: ptr("5 ")}, wantErr: domain.ErrInvalidRequest, wantErrText: "page[size]"},
+		{name: "pageSizeInExponentForm", req: service.MessagesRequest{ConversationID: "conv", Size: ptr("1e2")}, wantErr: domain.ErrInvalidRequest, wantErrText: "page[size]"},
+		{name: "pageSizeWithADecimalPoint", req: service.MessagesRequest{ConversationID: "conv", Size: ptr("5.0")}, wantErr: domain.ErrInvalidRequest, wantErrText: "page[size]"},
+		{name: "pageSizeInHexadecimal", req: service.MessagesRequest{ConversationID: "conv", Size: ptr("0x10")}, wantErr: domain.ErrInvalidRequest, wantErrText: "page[size]"},
+		{name: "pageSizeWithUnderscores", req: service.MessagesRequest{ConversationID: "conv", Size: ptr("1_0")}, wantErr: domain.ErrInvalidRequest, wantErrText: "page[size]"},
+		{name: "pageSizeInArabicIndicDigits", req: service.MessagesRequest{ConversationID: "conv", Size: ptr("٥")}, wantErr: domain.ErrInvalidRequest, wantErrText: "page[size]"},
+		{name: "pageSizeWithANulCharacter", req: service.MessagesRequest{ConversationID: "conv", Size: ptr("5\x00")}, wantErr: domain.ErrInvalidRequest, wantErrText: "page[size]"},
+		{name: "pageSizeJustBeyondAnInt32", req: service.MessagesRequest{ConversationID: "conv", Size: ptr("2147483648")}, wantErr: domain.ErrInvalidRequest, wantErrText: "page[size]"},
+		{name: "pageSizeTheLargestInt32", req: service.MessagesRequest{ConversationID: "conv", Size: ptr("2147483647")}, wantErr: domain.ErrInvalidRequest, wantErrText: "page[size]"},
+		{name: "pageSizeVeryLong", req: service.MessagesRequest{ConversationID: "conv", Size: ptr(strings.Repeat("9", 5000))}, wantErr: domain.ErrInvalidRequest, wantErrText: "page[size]"},
+		{name: "pageSizeJustBelowTheMaximumIsAccepted", req: service.MessagesRequest{ConversationID: "conv", Size: ptr("99")},
+			wantQuery: &domain.PageQuery{Size: 99, ConversationID: "conv", Direction: domain.DirectionNewest},
+			page:      domain.Page{Messages: messagesAt(1)},
+			want:      domain.MessagePage{ConversationID: "conv", Direction: domain.DirectionNewest, Size: 99, Messages: messagesAt(1), BeforeCursor: "1", AfterCursor: "1"}},
+		// The checks run in a fixed order: conversation id, page size, cursors.
+		{name: "aMalformedIDIsReportedBeforeABadPageSize", req: service.MessagesRequest{ConversationID: "bad id", Size: ptr("0")}, wantErr: domain.ErrInvalidRequest, wantErrText: "conversation id"},
+		{name: "aBadPageSizeIsReportedBeforeABadCursor", req: service.MessagesRequest{ConversationID: "conv", Size: ptr("0"), Before: ptr("abc")}, wantErr: domain.ErrInvalidRequest, wantErrText: "page[size]"},
+		{name: "aBadPageSizeIsReportedBeforeTwoCursors", req: service.MessagesRequest{ConversationID: "conv", Size: ptr("0"), Before: ptr("1"), After: ptr("2")}, wantErr: domain.ErrInvalidRequest, wantErrText: "page[size]"},
+		{name: "aGoodPageSizeStillLetsABadCursorThrough", req: service.MessagesRequest{ConversationID: "conv", Size: ptr("5"), Before: ptr("abc")}, wantErr: domain.ErrInvalidCursor},
 		{name: "bothCursorsAreRefused", req: service.MessagesRequest{ConversationID: "conv", Before: ptr("1"), After: ptr("2")}, wantErr: domain.ErrInvalidRequest, wantErrText: "cannot be used together"},
 		{name: "emptyConversationID", req: service.MessagesRequest{}, wantErr: domain.ErrInvalidRequest, wantErrText: "conversation id"},
 		{name: "conversationIDWithASpace", req: service.MessagesRequest{ConversationID: "conv a"}, wantErr: domain.ErrInvalidRequest},
@@ -100,19 +155,19 @@ func TestMessages(t *testing.T) {
 		{
 			name:      "unknownConversation",
 			req:       service.MessagesRequest{ConversationID: "conv"},
-			wantQuery: &domain.PageQuery{ConversationID: "conv", Direction: domain.DirectionNewest},
+			wantQuery: &domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionNewest},
 			repoErr:   domain.ErrNotFound, wantErr: domain.ErrNotFound,
 		},
 		{
 			name:      "cursorOfAnotherConversation",
 			req:       service.MessagesRequest{ConversationID: "conv", Before: ptr("3")},
-			wantQuery: &domain.PageQuery{ConversationID: "conv", Direction: domain.DirectionBefore, CursorSequence: 3},
+			wantQuery: &domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionBefore, CursorSequence: 3},
 			repoErr:   domain.ErrInvalidCursor, wantErr: domain.ErrInvalidCursor,
 		},
 		{
 			name:      "storeErrorIsReturnedAsIs",
 			req:       service.MessagesRequest{ConversationID: "conv"},
-			wantQuery: &domain.PageQuery{ConversationID: "conv", Direction: domain.DirectionNewest},
+			wantQuery: &domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionNewest},
 			repoErr:   storeDown, wantErr: storeDown,
 		},
 	}
@@ -161,44 +216,150 @@ func TestMessagesErrorsNeverEchoTheInput(t *testing.T) {
 	}
 }
 
+func conversationsOf(ids ...string) []domain.ConversationSummary {
+	out := make([]domain.ConversationSummary, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, domain.ConversationSummary{ConversationID: id, MessageCount: 2})
+	}
+
+	return out
+}
+
 func TestConversations(t *testing.T) {
 	storeDown := errors.New("connection reset")
-	list := domain.ConversationList{Conversations: []domain.ConversationSummary{{ConversationID: "c", MessageCount: 2}}, HasMore: true}
+	longID := strings.Repeat("c", 128)
 
 	tests := []struct {
-		name      string
-		account   string
-		callStore bool
-		list      domain.ConversationList
-		repoErr   error
-		wantErr   error
+		name        string
+		req         service.ConversationsRequest
+		wantQuery   *domain.ConversationQuery // nil when the store must not be called
+		page        domain.ConversationList
+		repoErr     error
+		want        domain.ConversationList
+		wantErr     error
+		wantErrText string
 	}{
-		{name: "listOfTheAccount", account: "acc-1", callStore: true, list: list},
-		{name: "accountWithNoConversationsIsAnEmptyList", account: "acc-2", callStore: true, list: domain.ConversationList{Conversations: []domain.ConversationSummary{}}},
-		{name: "uuidAccount", account: "c59f8a80-6e65-4d1b-9c0e-0a1b2c3d4e5f", callStore: true, list: list},
-		{name: "missingAccount", account: "", wantErr: domain.ErrInvalidRequest},
-		{name: "accountWithSpaces", account: "acc 1", wantErr: domain.ErrInvalidRequest},
-		{name: "accountWithSQLCharacters", account: "x'; drop table--", wantErr: domain.ErrInvalidRequest},
-		{name: "accountTooLong", account: strings.Repeat("a", 129), wantErr: domain.ErrInvalidRequest},
-		{name: "storeError", account: "acc-1", callStore: true, repoErr: storeDown, wantErr: storeDown},
+		{
+			name:      "noCursorAsksForTheMostRecentPage",
+			req:       service.ConversationsRequest{IDYapeAccount: "acc-1"},
+			wantQuery: &domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionNewest, Size: domain.ConversationListSize},
+			page:      domain.ConversationList{Conversations: conversationsOf("c3", "c2", "c1"), HasMore: true},
+			want: domain.ConversationList{
+				Direction: domain.DirectionNewest, Size: domain.ConversationListSize, Conversations: conversationsOf("c3", "c2", "c1"),
+				HasMore: true, BeforeCursor: "c1", AfterCursor: "c3",
+			},
+		},
+		{
+			name:      "beforeAsksForOlderConversations",
+			req:       service.ConversationsRequest{IDYapeAccount: "acc-1", Before: ptr("c1")},
+			wantQuery: &domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionBefore, CursorID: "c1", Size: domain.ConversationListSize},
+			page:      domain.ConversationList{Conversations: conversationsOf("b2", "b1")},
+			want: domain.ConversationList{
+				Direction: domain.DirectionBefore, Size: domain.ConversationListSize, Conversations: conversationsOf("b2", "b1"),
+				BeforeCursor: "b1", AfterCursor: "b2",
+			},
+		},
+		{
+			name:      "afterAsksForMoreRecentConversations",
+			req:       service.ConversationsRequest{IDYapeAccount: "acc-1", After: ptr("c3")},
+			wantQuery: &domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionAfter, CursorID: "c3", Size: domain.ConversationListSize},
+			page:      domain.ConversationList{Conversations: conversationsOf("d1"), HasMore: true},
+			want: domain.ConversationList{
+				Direction: domain.DirectionAfter, Size: domain.ConversationListSize, Conversations: conversationsOf("d1"),
+				HasMore: true, BeforeCursor: "d1", AfterCursor: "d1",
+			},
+		},
+		{
+			name:      "pageSizeAsksForFewer",
+			req:       service.ConversationsRequest{IDYapeAccount: "acc-1", Size: ptr("20")},
+			wantQuery: &domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionNewest, Size: 20},
+			page:      domain.ConversationList{Conversations: conversationsOf("c1")},
+			want:      domain.ConversationList{Direction: domain.DirectionNewest, Size: 20, Conversations: conversationsOf("c1"), BeforeCursor: "c1", AfterCursor: "c1"},
+		},
+		{
+			name:      "pageSizeTravelsWithACursor",
+			req:       service.ConversationsRequest{IDYapeAccount: "acc-1", Before: ptr("c1"), Size: ptr("1")},
+			wantQuery: &domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionBefore, CursorID: "c1", Size: 1},
+			page:      domain.ConversationList{Conversations: conversationsOf("b1"), HasMore: true},
+			want:      domain.ConversationList{Direction: domain.DirectionBefore, Size: 1, Conversations: conversationsOf("b1"), HasMore: true, BeforeCursor: "b1", AfterCursor: "b1"},
+		},
+		{
+			name:      "accountWithNoConversationsIsAnEmptyPageWithoutCursors",
+			req:       service.ConversationsRequest{IDYapeAccount: "acc-2"},
+			wantQuery: &domain.ConversationQuery{IDYapeAccount: "acc-2", Direction: domain.DirectionNewest, Size: domain.ConversationListSize},
+			page:      domain.ConversationList{Conversations: []domain.ConversationSummary{}},
+			want:      domain.ConversationList{Direction: domain.DirectionNewest, Size: domain.ConversationListSize, Conversations: []domain.ConversationSummary{}},
+		},
+		{
+			name:      "uuidAccount",
+			req:       service.ConversationsRequest{IDYapeAccount: "c59f8a80-6e65-4d1b-9c0e-0a1b2c3d4e5f"},
+			wantQuery: &domain.ConversationQuery{IDYapeAccount: "c59f8a80-6e65-4d1b-9c0e-0a1b2c3d4e5f", Direction: domain.DirectionNewest, Size: domain.ConversationListSize},
+			page:      domain.ConversationList{Conversations: conversationsOf("c1")},
+			want:      domain.ConversationList{Direction: domain.DirectionNewest, Size: domain.ConversationListSize, Conversations: conversationsOf("c1"), BeforeCursor: "c1", AfterCursor: "c1"},
+		},
+		{
+			name:      "theLongestCursorIsAccepted",
+			req:       service.ConversationsRequest{IDYapeAccount: "acc-1", Before: ptr(longID)},
+			wantQuery: &domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionBefore, CursorID: longID, Size: domain.ConversationListSize},
+			page:      domain.ConversationList{Conversations: []domain.ConversationSummary{}},
+			want:      domain.ConversationList{Direction: domain.DirectionBefore, Size: domain.ConversationListSize, Conversations: []domain.ConversationSummary{}},
+		},
+		{name: "missingAccount", req: service.ConversationsRequest{}, wantErr: domain.ErrInvalidRequest, wantErrText: "idYapeAccount"},
+		{name: "accountWithSpaces", req: service.ConversationsRequest{IDYapeAccount: "acc 1"}, wantErr: domain.ErrInvalidRequest},
+		{name: "accountWithSQLCharacters", req: service.ConversationsRequest{IDYapeAccount: "x'; drop table--"}, wantErr: domain.ErrInvalidRequest},
+		{name: "accountTooLong", req: service.ConversationsRequest{IDYapeAccount: strings.Repeat("a", 129)}, wantErr: domain.ErrInvalidRequest},
+		{name: "bothCursorsAreRefused", req: service.ConversationsRequest{IDYapeAccount: "acc-1", Before: ptr("a"), After: ptr("b")}, wantErr: domain.ErrInvalidRequest, wantErrText: "cannot be used together"},
+		{name: "anEmptyCursorBesideARealOneIsStillTwoCursors", req: service.ConversationsRequest{IDYapeAccount: "acc-1", Before: ptr(""), After: ptr("b")}, wantErr: domain.ErrInvalidRequest, wantErrText: "cannot be used together"},
+		{name: "emptyBeforeIsAnInvalidCursor", req: service.ConversationsRequest{IDYapeAccount: "acc-1", Before: ptr("")}, wantErr: domain.ErrInvalidCursor},
+		{name: "emptyAfterIsAnInvalidCursor", req: service.ConversationsRequest{IDYapeAccount: "acc-1", After: ptr("")}, wantErr: domain.ErrInvalidCursor},
+		{name: "cursorWithASpace", req: service.ConversationsRequest{IDYapeAccount: "acc-1", Before: ptr("c 1")}, wantErr: domain.ErrInvalidCursor},
+		{name: "cursorWithSQLCharacters", req: service.ConversationsRequest{IDYapeAccount: "acc-1", After: ptr("x'; drop table--")}, wantErr: domain.ErrInvalidCursor},
+		{name: "cursorWithASlash", req: service.ConversationsRequest{IDYapeAccount: "acc-1", Before: ptr("../etc")}, wantErr: domain.ErrInvalidCursor},
+		{name: "cursorTooLong", req: service.ConversationsRequest{IDYapeAccount: "acc-1", Before: ptr(strings.Repeat("c", 129))}, wantErr: domain.ErrInvalidCursor},
+		{name: "cursorWithANulCharacter", req: service.ConversationsRequest{IDYapeAccount: "acc-1", After: ptr("c\x001")}, wantErr: domain.ErrInvalidCursor},
+		{name: "pageSizeZero", req: service.ConversationsRequest{IDYapeAccount: "acc-1", Size: ptr("0")}, wantErr: domain.ErrInvalidRequest, wantErrText: "page[size]"},
+		{name: "pageSizeOverTheMaximum", req: service.ConversationsRequest{IDYapeAccount: "acc-1", Size: ptr("101")}, wantErr: domain.ErrInvalidRequest, wantErrText: "page[size]"},
+		{name: "pageSizeEmpty", req: service.ConversationsRequest{IDYapeAccount: "acc-1", Size: ptr("")}, wantErr: domain.ErrInvalidRequest, wantErrText: "page[size]"},
+		{name: "pageSizeNotANumber", req: service.ConversationsRequest{IDYapeAccount: "acc-1", Size: ptr("many")}, wantErr: domain.ErrInvalidRequest, wantErrText: "page[size]"},
+		{name: "pageSizeWithAPlusSign", req: service.ConversationsRequest{IDYapeAccount: "acc-1", Size: ptr("+5")}, wantErr: domain.ErrInvalidRequest, wantErrText: "page[size]"},
+		{name: "pageSizeWithLeadingZeros", req: service.ConversationsRequest{IDYapeAccount: "acc-1", Size: ptr("05")}, wantErr: domain.ErrInvalidRequest, wantErrText: "page[size]"},
+		// The checks run in a fixed order: account, page size, cursors.
+		{name: "aMissingAccountIsReportedBeforeABadPageSize", req: service.ConversationsRequest{Size: ptr("0")}, wantErr: domain.ErrInvalidRequest, wantErrText: "idYapeAccount"},
+		{name: "aBadPageSizeIsReportedBeforeABadCursor", req: service.ConversationsRequest{IDYapeAccount: "acc-1", Size: ptr("0"), Before: ptr("")}, wantErr: domain.ErrInvalidRequest, wantErrText: "page[size]"},
+		{name: "aGoodPageSizeStillLetsABadCursorThrough", req: service.ConversationsRequest{IDYapeAccount: "acc-1", Size: ptr("5"), Before: ptr("")}, wantErr: domain.ErrInvalidCursor},
+		{
+			name:      "cursorOfAnotherAccount",
+			req:       service.ConversationsRequest{IDYapeAccount: "acc-1", Before: ptr("theirs")},
+			wantQuery: &domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionBefore, CursorID: "theirs", Size: domain.ConversationListSize},
+			repoErr:   domain.ErrInvalidCursor, wantErr: domain.ErrInvalidCursor,
+		},
+		{
+			name:      "storeError",
+			req:       service.ConversationsRequest{IDYapeAccount: "acc-1"},
+			wantQuery: &domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionNewest, Size: domain.ConversationListSize},
+			repoErr:   storeDown, wantErr: storeDown,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			repo := mocks.NewMessageRepository(t)
-			if tt.callStore {
-				repo.On("ListConversations", mock.Anything, tt.account).Return(tt.list, tt.repoErr).Once()
+			if tt.wantQuery != nil {
+				repo.On("ListConversations", mock.Anything, *tt.wantQuery).Return(tt.page, tt.repoErr).Once()
 			}
 
-			got, err := NewService(repo).Conversations(context.Background(), tt.account)
+			got, err := NewService(repo).Conversations(context.Background(), tt.req)
 
 			if tt.wantErr != nil {
 				require.ErrorIs(t, err, tt.wantErr)
+				if tt.wantErrText != "" {
+					assert.Contains(t, err.Error(), tt.wantErrText)
+				}
 				assert.Equal(t, domain.ConversationList{}, got)
 				return
 			}
 			require.NoError(t, err)
-			assert.Equal(t, tt.list, got)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }

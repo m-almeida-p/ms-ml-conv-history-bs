@@ -8,17 +8,19 @@
 #      messages of the event store, with the same text, event and position;
 #   3. no text of a blocked input, a tool summary or a notification is in the history
 #      or in any API reply;
-#   4. the API serves each conversation completely (it follows the prev links);
+#   4. the API serves each conversation completely (it follows the Link header, rel="prev");
 #   5. `consumer rebuild` reproduces the messages table.
 # Settings (environment): PG_CONTAINER (yape-postgres), API_URL (http://localhost:3100),
 # REQUIRE_API=1 to fail when the API is down, REBUILD=no to skip the rebuild,
-# WAIT_SECONDS (60) for the consumer to catch up.
+# WAIT_SECONDS (60) for the consumer to catch up, PAGE_SIZE (1 to 100) to read the API with
+# smaller pages so a short conversation takes several calls and the Link header is followed.
 set -euo pipefail
 
 PG_CONTAINER="${PG_CONTAINER:-yape-postgres}"
 API_URL="${API_URL:-http://localhost:3100}"
 REBUILD="${REBUILD:-yes}"
 WAIT_SECONDS="${WAIT_SECONDS:-60}"
+PAGE_SIZE="${PAGE_SIZE:-}"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 psql_q() { docker exec -i "${PG_CONTAINER}" psql -U postgres -d postgres -v ON_ERROR_STOP=1 -At -F '|' "$@"; }
@@ -66,17 +68,18 @@ ORDER BY c.first
 SQL
 )"
 
-api_texts="$(mktemp)"; trap 'rm -f "${api_texts}"' EXIT
+api_texts="$(mktemp)"; api_headers="$(mktemp)"; trap 'rm -f "${api_texts}" "${api_headers}"' EXIT
 conversations=0
 while IFS='|' read -r conv expected stored textdiff missing_c extra <&3; do
   conversations=$((conversations + 1))
   api_count="-"; api_status=""
   if [[ "${api_up}" == yes ]]; then
-    path="/v1/conversations/${conv}/messages"; api_lines="$(mktemp)"
+    path="/v1/conversations/${conv}/messages${PAGE_SIZE:+?page[size]=${PAGE_SIZE}}"; api_lines="$(mktemp)"
     while [[ -n "${path}" ]]; do
-      body="$(curl -fsS -g -m 10 "${API_URL}${path}")" || { api_status=" api-error"; break; }
+      body="$(curl -fsS -g -m 10 -D "${api_headers}" "${API_URL}${path}")" || { api_status=" api-error"; break; }
       jq -r '.messages[] | "\(.metadata.sequence)|\(.text | @json)"' <<<"${body}" >>"${api_lines}"
-      path="$(jq -r '.links.prev // empty' <<<"${body}")"
+      # The way to the older page is the Link header: <path>; rel="prev". The last page has none.
+      path="$(tr -d '\r' <"${api_headers}" | sed -n 's/^[Ll]ink: <\([^>]*\)>; rel="prev".*/\1/p')"
     done
     api_count="$(wc -l <"${api_lines}" | tr -d ' ')"
     cut -d'|' -f2- "${api_lines}" >>"${api_texts}"

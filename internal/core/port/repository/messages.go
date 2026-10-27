@@ -15,7 +15,9 @@ type MessageRepository interface {
 	// domain.ErrInvalidCursor when the cursor is not a message of that conversation.
 	ListMessages(ctx context.Context, query domain.PageQuery) (domain.Page, error)
 
-	// ListConversations returns the account's conversations with chat messages,
-	// the most recent first, up to domain.ConversationListSize.
-	ListConversations(ctx context.Context, idYapeAccount string) (domain.ConversationList, error)
+	// ListConversations returns one page of the account's conversations with chat
+	// messages, the most recent first. It returns domain.ErrInvalidCursor when the
+	// cursor is not a conversation of that account. An account with none gets an
+	// empty page, not an error.
+	ListConversations(ctx context.Context, query domain.ConversationQuery) (domain.ConversationList, error)
 }

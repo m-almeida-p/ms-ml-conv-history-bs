@@ -11,17 +11,20 @@ import (
 )
 
 // Messages handles GET /v1/conversations/{conversationId}/messages, with the
-// cursors page[before] and page[after] (at most one).
+// cursors page[before] and page[after] (at most one) and the page size page[size].
+// The body holds the messages only; the way to the next page is the Link header.
 //
 // @Summary List the messages of a conversation
-// @Description Returns up to 100 chat messages, oldest first. Without a cursor it returns the newest page. page[before] returns the 100 messages just older than the given message, page[after] the 100 just newer. Send at most one of them, once, with a message _id of this conversation. hasMore and the link follow the direction of travel: links.prev for the newest and before pages when older messages exist, links.next for after pages when newer ones exist. A page past the last message is an empty array.
+// @Description Returns up to 100 chat messages, oldest first. Without a cursor it returns the newest page. page[before] returns the messages just older than the given message, page[after] the ones just newer. Send at most one of them, once, with a message _id of this conversation. page[size] (1 to 100, default 100) says how many. The body holds only the conversation and its messages; more pages are announced in the Link header: rel="prev" (older messages) on the newest and before pages, rel="next" (newer messages) on after pages, present only when there are more. The last page has no Link header. A page past the last message is an empty array.
 // @Tags Messages
 // @Param conversationId path string true "Conversation id (letters, digits, . _ : -, up to 128 characters)"
 // @Param page[before] query string false "Message _id: read the page of messages older than it"
 // @Param page[after] query string false "Message _id: read the page of messages newer than it"
+// @Param page[size] query int false "How many messages the page holds, from 1 to 100 (default 100); the Link header repeats it when it is not the default" minimum(1) maximum(100) default(100)
 // @Produce json
 // @Success 200 {object} messagesResponse
-// @Failure 400 {object} errorResponse "invalid_request (malformed id, both cursors, a cursor sent twice) or invalid_cursor (empty, not a plain decimal _id, or not a message of this conversation)"
+// @Header 200 {string} Link "Only when more messages exist in the direction read: rel=prev (older messages) on newest and before pages, rel=next (newer messages) on after pages. The target is this route with page[before] or page[after] set to the _id of the first or last message, and page[size] repeated when it is not 100."
+// @Failure 400 {object} errorResponse "invalid_request (malformed id, both cursors, a parameter sent twice, a page[size] outside 1 to 100) or invalid_cursor (empty, not a plain decimal _id, or not a message of this conversation)"
 // @Failure 404 {object} errorResponse "not_found: the conversation has no chat messages"
 // @Failure 500 {object} errorResponse "internal_error"
 // @Router /v1/conversations/{conversationId}/messages [get]
@@ -35,16 +38,48 @@ func (h *Handler) Messages(c echo.Context) error {
 		return h.fail(c, err)
 	}
 
+	size, err := queryOnce(c, "page[size]")
+	if err != nil {
+		return h.fail(c, err)
+	}
+
 	page, err := h.history.Messages(c.Request().Context(), service.MessagesRequest{
 		ConversationID: c.Param("conversationId"),
 		Before:         before,
 		After:          after,
+		Size:           size,
 	})
 	if err != nil {
 		return h.fail(c, err)
 	}
 
+	if link := continuation(page); link != "" {
+		c.Response().Header().Set("Link", link)
+	}
+
 	return c.JSON(http.StatusOK, toMessagesResponse(page))
+}
+
+// continuation is the Link header that continues the page in the direction it was
+// read: rel="next" after a page read forward, rel="prev" after one read backward.
+// It is empty on the last page. The page size is repeated when it is not the default,
+// so following the link keeps the size the client chose.
+func continuation(page domain.MessagePage) string {
+	if !page.HasMore {
+		return ""
+	}
+
+	target := "/v1/conversations/" + page.ConversationID + "/messages?page[before]=" + page.BeforeCursor
+	rel := "prev"
+	if page.Direction == domain.DirectionAfter {
+		target = "/v1/conversations/" + page.ConversationID + "/messages?page[after]=" + page.AfterCursor
+		rel = "next"
+	}
+	if page.Size != domain.PageSize {
+		target += "&page[size]=" + itoa(int64(page.Size))
+	}
+
+	return "<" + target + `>; rel="` + rel + `"`
 }
 
 func toMessagesResponse(page domain.MessagePage) messagesResponse {
@@ -62,22 +97,7 @@ func toMessagesResponse(page domain.MessagePage) messagesResponse {
 		})
 	}
 
-	response := messagesResponse{
-		Conversation: conversationRef{ID: page.ConversationID},
-		Messages:     messages,
-		Meta:         messagesMeta{HasMore: page.HasMore, BeforeCursor: page.BeforeCursor, AfterCursor: page.AfterCursor},
-	}
-
-	if page.HasMore {
-		base := "/v1/conversations/" + page.ConversationID + "/messages"
-		if page.Direction == domain.DirectionAfter {
-			response.Links.Next = base + "?page[after]=" + page.AfterCursor
-		} else {
-			response.Links.Prev = base + "?page[before]=" + page.BeforeCursor
-		}
-	}
-
-	return response
+	return messagesResponse{Conversation: conversationRef{ID: page.ConversationID}, Messages: messages}
 }
 
 // queryOnce returns the one value of a query parameter, nil when it is absent. A

@@ -20,6 +20,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/yaperos/ms-ml-conv-history-bs/internal/core/domain"
+	"github.com/yaperos/ms-ml-conv-history-bs/internal/core/port/service"
 	"github.com/yaperos/ms-ml-conv-history-bs/internal/core/port/service/mocks"
 )
 
@@ -186,7 +187,7 @@ func TestRepliesConformToTheOpenAPISpec(t *testing.T) {
 			target: "/v1/conversations/conv_v1_a/messages",
 			expect: func(h *mocks.History) {
 				h.On("Messages", mock.Anything, mock.Anything).Return(domain.MessagePage{
-					ConversationID: "conv_v1_a", Direction: domain.DirectionNewest, HasMore: true, BeforeCursor: "1", AfterCursor: "2",
+					Size: domain.PageSize, ConversationID: "conv_v1_a", Direction: domain.DirectionNewest, HasMore: true, BeforeCursor: "1", AfterCursor: "2",
 					Messages: []domain.Message{message(1, domain.RoleUser, "UserMessageSent", false), message(2, domain.RoleMaker, "GuardrailResponseSent", true)},
 				}, nil).Once()
 			},
@@ -197,7 +198,7 @@ func TestRepliesConformToTheOpenAPISpec(t *testing.T) {
 			target: "/v1/conversations/conv_v1_a/messages?page[after]=1",
 			expect: func(h *mocks.History) {
 				h.On("Messages", mock.Anything, mock.Anything).Return(domain.MessagePage{
-					ConversationID: "conv_v1_a", Direction: domain.DirectionAfter, HasMore: true, BeforeCursor: "2", AfterCursor: "2",
+					Size: domain.PageSize, ConversationID: "conv_v1_a", Direction: domain.DirectionAfter, HasMore: true, BeforeCursor: "2", AfterCursor: "2",
 					Messages: []domain.Message{message(2, domain.RoleMaker, "AgentMessageSent", false)},
 				}, nil).Once()
 			},
@@ -207,7 +208,7 @@ func TestRepliesConformToTheOpenAPISpec(t *testing.T) {
 			name:   "emptyPage",
 			target: "/v1/conversations/conv_v1_a/messages?page[after]=9",
 			expect: func(h *mocks.History) {
-				h.On("Messages", mock.Anything, mock.Anything).Return(domain.MessagePage{ConversationID: "conv_v1_a", Direction: domain.DirectionAfter}, nil).Once()
+				h.On("Messages", mock.Anything, mock.Anything).Return(domain.MessagePage{Size: domain.PageSize, ConversationID: "conv_v1_a", Direction: domain.DirectionAfter}, nil).Once()
 			},
 			wantStatus: http.StatusOK, definition: "handler.messagesResponse",
 		},
@@ -215,11 +216,39 @@ func TestRepliesConformToTheOpenAPISpec(t *testing.T) {
 			name:   "conversationList",
 			target: "/v1/conversations?idYapeAccount=acc-1",
 			expect: func(h *mocks.History) {
-				h.On("Conversations", mock.Anything, "acc-1").Return(domain.ConversationList{HasMore: true, Conversations: []domain.ConversationSummary{
-					{ConversationID: "conv_v1_a", MessageCount: 5, FirstOccurredAt: at, LastOccurredAt: at},
-				}}, nil).Once()
+				h.On("Conversations", mock.Anything, service.ConversationsRequest{IDYapeAccount: "acc-1"}).Return(domain.ConversationList{
+					Direction: domain.DirectionNewest, Size: domain.ConversationListSize, HasMore: true, AfterCursor: "conv_v1_a", BeforeCursor: "conv_v1_a",
+					Conversations: []domain.ConversationSummary{{ConversationID: "conv_v1_a", MessageCount: 5, FirstOccurredAt: at, LastOccurredAt: at}},
+				}, nil).Once()
 			},
 			wantStatus: http.StatusOK, definition: "handler.conversationsResponse",
+		},
+		{
+			name:   "conversationListAfterACursor",
+			target: "/v1/conversations?idYapeAccount=acc-1&page[after]=conv_v1_a&page[size]=1",
+			expect: func(h *mocks.History) {
+				h.On("Conversations", mock.Anything, mock.Anything).Return(domain.ConversationList{
+					Direction: domain.DirectionAfter, Size: 1, HasMore: true, AfterCursor: "conv_v1_b", BeforeCursor: "conv_v1_b",
+					Conversations: []domain.ConversationSummary{{ConversationID: "conv_v1_b", MessageCount: 2, FirstOccurredAt: at, LastOccurredAt: at}},
+				}, nil).Once()
+			},
+			wantStatus: http.StatusOK, definition: "handler.conversationsResponse",
+		},
+		{
+			name:   "emptyConversationPage",
+			target: "/v1/conversations?idYapeAccount=acc-1&page[before]=conv_v1_a",
+			expect: func(h *mocks.History) {
+				h.On("Conversations", mock.Anything, mock.Anything).Return(domain.ConversationList{Direction: domain.DirectionBefore, Size: domain.ConversationListSize}, nil).Once()
+			},
+			wantStatus: http.StatusOK, definition: "handler.conversationsResponse",
+		},
+		{
+			name:   "invalidConversationCursor",
+			target: "/v1/conversations?idYapeAccount=acc-1&page[before]=theirs",
+			expect: func(h *mocks.History) {
+				h.On("Conversations", mock.Anything, mock.Anything).Return(domain.ConversationList{}, domain.ErrInvalidCursor).Once()
+			},
+			wantStatus: http.StatusBadRequest, definition: "handler.errorResponse",
 		},
 		{
 			name:   "invalidCursor",
@@ -233,7 +262,7 @@ func TestRepliesConformToTheOpenAPISpec(t *testing.T) {
 			name:   "invalidRequest",
 			target: "/v1/conversations?idYapeAccount=",
 			expect: func(h *mocks.History) {
-				h.On("Conversations", mock.Anything, "").Return(domain.ConversationList{}, domain.ErrInvalidRequest).Once()
+				h.On("Conversations", mock.Anything, service.ConversationsRequest{}).Return(domain.ConversationList{}, domain.ErrInvalidRequest).Once()
 			},
 			wantStatus: http.StatusBadRequest, definition: "handler.errorResponse",
 		},

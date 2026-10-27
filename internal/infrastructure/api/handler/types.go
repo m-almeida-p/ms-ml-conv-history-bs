@@ -5,12 +5,11 @@ package handler
 
 import "time"
 
-// messagesResponse is the reply for one page of a conversation.
+// messagesResponse is the reply for one page of a conversation. It holds the data
+// only: whether more pages exist, and where, is the Link header.
 type messagesResponse struct {
 	Conversation conversationRef   `json:"conversation"`
 	Messages     []messageResponse `json:"messages"`
-	Meta         messagesMeta      `json:"meta"`
-	Links        pageLinks         `json:"links"`
 }
 
 type conversationRef struct {
@@ -51,28 +50,10 @@ type messageMetadata struct {
 	Flow string `json:"flow,omitempty" example:"p2p"`
 }
 
-// messagesMeta says whether the page can be continued in the direction it was
-// read, and gives the cursors of its first and last message.
-type messagesMeta struct {
-	// HasMore is true when older messages exist (newest and before pages) or newer ones exist (after pages).
-	HasMore bool `json:"hasMore" example:"true"`
-	// BeforeCursor is the _id of the first message of the page. Absent for an empty page.
-	BeforeCursor string `json:"beforeCursor,omitempty" example:"1042"`
-	// AfterCursor is the _id of the last message of the page. Absent for an empty page.
-	AfterCursor string `json:"afterCursor,omitempty" example:"1051"`
-}
-
-// pageLinks continue the page: prev reads older messages, next reads newer ones.
-// Only the link in the direction of travel is present, and only when there is more.
-type pageLinks struct {
-	Prev string `json:"prev,omitempty" example:"/v1/conversations/conv_v1_8ab59029-bc3c-4e77-b49f-9fb053d90c52/messages?page[before]=1042"`
-	Next string `json:"next,omitempty" example:"/v1/conversations/conv_v1_8ab59029-bc3c-4e77-b49f-9fb053d90c52/messages?page[after]=1051"`
-}
-
-// conversationsResponse is the reply for an account's conversations.
+// conversationsResponse is the reply for one page of an account's conversations. It holds the
+// data only: whether more pages exist, and where, is the Link header.
 type conversationsResponse struct {
 	Conversations []conversationResponse `json:"conversations"`
-	Meta          conversationsMeta      `json:"meta"`
 }
 
 type conversationResponse struct {
@@ -81,11 +62,6 @@ type conversationResponse struct {
 	// FirstReceived and LastReceived are the times of the first and last message, in Unix seconds with milliseconds.
 	FirstReceived float64 `json:"firstReceived" example:"1792505243.5"`
 	LastReceived  float64 `json:"lastReceived" example:"1792505543.5"`
-}
-
-type conversationsMeta struct {
-	// HasMore is true when the account has more conversations than the 100 listed.
-	HasMore bool `json:"hasMore" example:"false"`
 }
 
 // errorResponse is the body of every error.

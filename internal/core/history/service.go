@@ -31,7 +31,12 @@ func (s *Service) Messages(ctx context.Context, req service.MessagesRequest) (do
 		return domain.MessagePage{}, fmt.Errorf("%w: the conversation id is malformed", domain.ErrInvalidRequest)
 	}
 
-	query := domain.PageQuery{ConversationID: req.ConversationID, Direction: domain.DirectionNewest}
+	size, err := parsePageSize(req.Size, domain.PageSize)
+	if err != nil {
+		return domain.MessagePage{}, err
+	}
+
+	query := domain.PageQuery{ConversationID: req.ConversationID, Direction: domain.DirectionNewest, Size: size}
 
 	switch {
 	case req.Before != nil && req.After != nil:
@@ -60,6 +65,7 @@ func (s *Service) Messages(ctx context.Context, req service.MessagesRequest) (do
 	result := domain.MessagePage{
 		ConversationID: req.ConversationID,
 		Direction:      query.Direction,
+		Size:           size,
 		Messages:       page.Messages,
 		HasMore:        page.HasMore,
 	}
@@ -72,12 +78,59 @@ func (s *Service) Messages(ctx context.Context, req service.MessagesRequest) (do
 }
 
 // Conversations implements service.History.
-func (s *Service) Conversations(ctx context.Context, idYapeAccount string) (domain.ConversationList, error) {
-	if !domain.ValidIdentifier(idYapeAccount) {
+func (s *Service) Conversations(ctx context.Context, req service.ConversationsRequest) (domain.ConversationList, error) {
+	if !domain.ValidIdentifier(req.IDYapeAccount) {
 		return domain.ConversationList{}, fmt.Errorf("%w: idYapeAccount is missing or malformed", domain.ErrInvalidRequest)
 	}
 
-	return s.messages.ListConversations(ctx, idYapeAccount)
+	size, err := parsePageSize(req.Size, domain.ConversationListSize)
+	if err != nil {
+		return domain.ConversationList{}, err
+	}
+
+	query := domain.ConversationQuery{IDYapeAccount: req.IDYapeAccount, Direction: domain.DirectionNewest, Size: size}
+
+	switch {
+	case req.Before != nil && req.After != nil:
+		return domain.ConversationList{}, fmt.Errorf("%w: page[before] and page[after] cannot be used together", domain.ErrInvalidRequest)
+	case req.Before != nil:
+		query.Direction = domain.DirectionBefore
+		query.CursorID = *req.Before
+	case req.After != nil:
+		query.Direction = domain.DirectionAfter
+		query.CursorID = *req.After
+	}
+	if query.Direction != domain.DirectionNewest && !domain.ValidIdentifier(query.CursorID) {
+		return domain.ConversationList{}, fmt.Errorf("%w: the cursor is not a conversation id", domain.ErrInvalidCursor)
+	}
+
+	list, err := s.messages.ListConversations(ctx, query)
+	if err != nil {
+		return domain.ConversationList{}, err
+	}
+
+	list.Direction, list.Size = query.Direction, size
+	if n := len(list.Conversations); n > 0 {
+		// The page is most recent first: the first conversation continues forwards, the last backwards.
+		list.AfterCursor = list.Conversations[0].ConversationID
+		list.BeforeCursor = list.Conversations[n-1].ConversationID
+	}
+
+	return list, nil
+}
+
+// parsePageSize reads page[size]. Absent means a full page of limit. Present, it must be
+// a plain decimal from 1 to limit, in the form the service documents.
+func parsePageSize(raw *string, limit int) (int, error) {
+	if raw == nil {
+		return limit, nil
+	}
+	size, err := strconv.ParseInt(*raw, 10, 32)
+	if err != nil || size < 1 || size > int64(limit) || strconv.FormatInt(size, 10) != *raw {
+		return 0, fmt.Errorf("%w: page[size] must be a whole number from 1 to %d", domain.ErrInvalidRequest, limit)
+	}
+
+	return int(size), nil
 }
 
 // parseCursor reads a message _id, which is the sequence of its event. Only the

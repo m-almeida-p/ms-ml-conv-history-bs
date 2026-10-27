@@ -16,9 +16,9 @@ type History struct {
 	mock.Mock
 }
 
-// Conversations provides a mock function with given fields: ctx, idYapeAccount
-func (_m *History) Conversations(ctx context.Context, idYapeAccount string) (domain.ConversationList, error) {
-	ret := _m.Called(ctx, idYapeAccount)
+// Conversations provides a mock function with given fields: ctx, req
+func (_m *History) Conversations(ctx context.Context, req service.ConversationsRequest) (domain.ConversationList, error) {
+	ret := _m.Called(ctx, req)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Conversations")
@@ -26,17 +26,17 @@ func (_m *History) Conversations(ctx context.Context, idYapeAccount string) (dom
 
 	var r0 domain.ConversationList
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, string) (domain.ConversationList, error)); ok {
-		return rf(ctx, idYapeAccount)
+	if rf, ok := ret.Get(0).(func(context.Context, service.ConversationsRequest) (domain.ConversationList, error)); ok {
+		return rf(ctx, req)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, string) domain.ConversationList); ok {
-		r0 = rf(ctx, idYapeAccount)
+	if rf, ok := ret.Get(0).(func(context.Context, service.ConversationsRequest) domain.ConversationList); ok {
+		r0 = rf(ctx, req)
 	} else {
 		r0 = ret.Get(0).(domain.ConversationList)
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, string) error); ok {
-		r1 = rf(ctx, idYapeAccount)
+	if rf, ok := ret.Get(1).(func(context.Context, service.ConversationsRequest) error); ok {
+		r1 = rf(ctx, req)
 	} else {
 		r1 = ret.Error(1)
 	}

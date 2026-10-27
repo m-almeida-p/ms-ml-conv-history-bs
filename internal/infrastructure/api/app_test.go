@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/yaperos/ms-ml-conv-history-bs/internal/core/domain"
+	"github.com/yaperos/ms-ml-conv-history-bs/internal/core/port/service"
 	"github.com/yaperos/ms-ml-conv-history-bs/internal/core/port/service/mocks"
 )
 
@@ -83,7 +84,7 @@ func TestServerRoutes(t *testing.T) {
 			name:   "conversationsRoute",
 			target: "/v1/conversations?idYapeAccount=acc-1",
 			expect: func(h *mocks.History) {
-				h.On("Conversations", mock.Anything, "acc-1").Return(domain.ConversationList{}, nil).Once()
+				h.On("Conversations", mock.Anything, service.ConversationsRequest{IDYapeAccount: "acc-1"}).Return(domain.ConversationList{}, nil).Once()
 			},
 			wantStatus: http.StatusOK,
 		},

@@ -14,9 +14,9 @@ type MessageRepository struct {
 	mock.Mock
 }
 
-// ListConversations provides a mock function with given fields: ctx, idYapeAccount
-func (_m *MessageRepository) ListConversations(ctx context.Context, idYapeAccount string) (domain.ConversationList, error) {
-	ret := _m.Called(ctx, idYapeAccount)
+// ListConversations provides a mock function with given fields: ctx, query
+func (_m *MessageRepository) ListConversations(ctx context.Context, query domain.ConversationQuery) (domain.ConversationList, error) {
+	ret := _m.Called(ctx, query)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ListConversations")
@@ -24,17 +24,17 @@ func (_m *MessageRepository) ListConversations(ctx context.Context, idYapeAccoun
 
 	var r0 domain.ConversationList
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, string) (domain.ConversationList, error)); ok {
-		return rf(ctx, idYapeAccount)
+	if rf, ok := ret.Get(0).(func(context.Context, domain.ConversationQuery) (domain.ConversationList, error)); ok {
+		return rf(ctx, query)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, string) domain.ConversationList); ok {
-		r0 = rf(ctx, idYapeAccount)
+	if rf, ok := ret.Get(0).(func(context.Context, domain.ConversationQuery) domain.ConversationList); ok {
+		r0 = rf(ctx, query)
 	} else {
 		r0 = ret.Get(0).(domain.ConversationList)
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, string) error); ok {
-		r1 = rf(ctx, idYapeAccount)
+	if rf, ok := ret.Get(1).(func(context.Context, domain.ConversationQuery) error); ok {
+		r1 = rf(ctx, query)
 	} else {
 		r1 = ret.Error(1)
 	}
