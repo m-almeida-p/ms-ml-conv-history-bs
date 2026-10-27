@@ -278,35 +278,30 @@ func TestListMessages(t *testing.T) {
 			name:        "aNegativeSizeIsRefusedBeforeTheStoreIsAsked",
 			query:       domain.PageQuery{Size: -1, ConversationID: "conv", Direction: domain.DirectionNewest},
 			expect:      func(pgxmock.PgxPoolIface) {},
-			wantErr:     domain.ErrInvalidRequest,
 			wantErrText: "page size",
 		},
 		{
 			name:        "aBadSizeIsRefusedBeforeTheCursorIsChecked",
 			query:       domain.PageQuery{Size: 0, ConversationID: "conv", Direction: domain.DirectionBefore, CursorSequence: 10},
 			expect:      func(pgxmock.PgxPoolIface) {},
-			wantErr:     domain.ErrInvalidRequest,
 			wantErrText: "page size",
 		},
 		{
 			name:        "aSizeOfZeroIsRefusedBeforeTheStoreIsAsked",
 			query:       domain.PageQuery{ConversationID: "conv", Direction: domain.DirectionNewest},
 			expect:      func(pgxmock.PgxPoolIface) {},
-			wantErr:     domain.ErrInvalidRequest,
 			wantErrText: "page size",
 		},
 		{
 			name:        "aSizeOverTheMaximumIsRefusedBeforeTheStoreIsAsked",
 			query:       domain.PageQuery{Size: domain.PageSize + 1, ConversationID: "conv", Direction: domain.DirectionNewest},
 			expect:      func(pgxmock.PgxPoolIface) {},
-			wantErr:     domain.ErrInvalidRequest,
 			wantErrText: "page size",
 		},
 		{
 			name:        "unknownDirection",
 			query:       domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: "sideways"},
 			expect:      func(pgxmock.PgxPoolIface) {},
-			wantErr:     domain.ErrInvalidRequest,
 			wantErrText: "sideways",
 		},
 	}
@@ -387,13 +382,15 @@ func TestListConversations(t *testing.T) {
 
 		return ids
 	}
-	cursorRow := func() *pgxmock.Rows { return pgxmock.NewRows([]string{"last_occurred_at"}).AddRow(at) }
+	// A cursor is a position: the time of a conversation's last message and its id.
+	cursorAt := func(id string) domain.ConversationCursor {
+		return domain.ConversationCursor{LastOccurredAt: at, ConversationID: id}
+	}
 	// A read of the newest page, and of a page beside a cursor, as the statements are told apart.
 	const (
-		newestSQL = `GROUP BY conversation_id\s+ORDER BY`
-		beforeSQL = `HAVING max\(occurred_at\) <`
-		afterSQL  = `HAVING max\(occurred_at\) >`
-		cursorSQL = `SELECT max\(occurred_at\) AS last_occurred_at`
+		newestSQL = `FROM conversation_summaries\s+WHERE 1=1\s+AND id_yape_account = \$1\s+ORDER BY`
+		beforeSQL = `\(last_occurred_at, conversation_id\) < \(\$2, \$3\)`
+		afterSQL  = `\(last_occurred_at, conversation_id\) > \(\$2, \$3\)`
 	)
 	size := domain.ConversationListSize
 
@@ -458,9 +455,8 @@ func TestListConversations(t *testing.T) {
 		},
 		{
 			name:  "beforeACursorChecksItThenReadsOlderConversations",
-			query: domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionBefore, CursorID: "c", Size: 2},
+			query: domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionBefore, Cursor: cursorAt("c"), Size: 2},
 			expect: func(m pgxmock.PgxPoolIface) {
-				m.ExpectQuery(cursorSQL).WithArgs("acc-1", "c").WillReturnRows(cursorRow())
 				m.ExpectQuery(beforeSQL).WithArgs("acc-1", at, "c", 3).WillReturnRows(rowsOf("b", "a", "z"))
 			},
 			wantIDs:     []string{"b", "a"},
@@ -468,18 +464,16 @@ func TestListConversations(t *testing.T) {
 		},
 		{
 			name:  "beforeTheOldestHasNothing",
-			query: domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionBefore, CursorID: "a", Size: size},
+			query: domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionBefore, Cursor: cursorAt("a"), Size: size},
 			expect: func(m pgxmock.PgxPoolIface) {
-				m.ExpectQuery(cursorSQL).WithArgs("acc-1", "a").WillReturnRows(cursorRow())
 				m.ExpectQuery(beforeSQL).WithArgs("acc-1", at, "a", 101).WillReturnRows(rowsOf())
 			},
 			wantIDs: []string{},
 		},
 		{
 			name:  "afterACursorReadsMoreRecentOnesAndReturnsThemMostRecentFirst",
-			query: domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionAfter, CursorID: "c", Size: 2},
+			query: domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionAfter, Cursor: cursorAt("c"), Size: 2},
 			expect: func(m pgxmock.PgxPoolIface) {
-				m.ExpectQuery(cursorSQL).WithArgs("acc-1", "c").WillReturnRows(cursorRow())
 				// The statement reads upwards from the cursor, nearest first: d, e, f.
 				m.ExpectQuery(afterSQL).WithArgs("acc-1", at, "c", 3).WillReturnRows(rowsOf("d", "e", "f"))
 			},
@@ -488,71 +482,48 @@ func TestListConversations(t *testing.T) {
 		},
 		{
 			name:  "afterWithFewerRowsThanTheSizeHasNoMore",
-			query: domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionAfter, CursorID: "c", Size: 5},
+			query: domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionAfter, Cursor: cursorAt("c"), Size: 5},
 			expect: func(m pgxmock.PgxPoolIface) {
-				m.ExpectQuery(cursorSQL).WithArgs("acc-1", "c").WillReturnRows(cursorRow())
 				m.ExpectQuery(afterSQL).WithArgs("acc-1", at, "c", 6).WillReturnRows(rowsOf("d"))
 			},
 			wantIDs: []string{"d"},
 		},
 		{
 			name:  "afterTheMostRecentHasNothing",
-			query: domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionAfter, CursorID: "z", Size: size},
+			query: domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionAfter, Cursor: cursorAt("z"), Size: size},
 			expect: func(m pgxmock.PgxPoolIface) {
-				m.ExpectQuery(cursorSQL).WithArgs("acc-1", "z").WillReturnRows(cursorRow())
 				m.ExpectQuery(afterSQL).WithArgs("acc-1", at, "z", 101).WillReturnRows(rowsOf())
 			},
 			wantIDs: []string{},
 		},
 		{
-			name:  "aCursorThatIsNotAConversationOfTheAccountIsInvalid",
-			query: domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionBefore, CursorID: "theirs", Size: size},
-			expect: func(m pgxmock.PgxPoolIface) {
-				m.ExpectQuery(cursorSQL).WithArgs("acc-1", "theirs").WillReturnRows(pgxmock.NewRows([]string{"last_occurred_at"}))
-			},
-			wantErr: domain.ErrInvalidCursor,
-		},
-		{
-			name:  "theCursorLookupFails",
-			query: domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionAfter, CursorID: "c", Size: size},
-			expect: func(m pgxmock.PgxPoolIface) {
-				m.ExpectQuery(cursorSQL).WithArgs("acc-1", "c").WillReturnError(dbDown)
-			},
-			wantErrText: "find conversation cursor",
-		},
-		{
 			name:        "aSizeOfZeroIsRefusedBeforeTheStoreIsAsked",
 			query:       domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionNewest},
 			expect:      func(pgxmock.PgxPoolIface) {},
-			wantErr:     domain.ErrInvalidRequest,
 			wantErrText: "page size",
 		},
 		{
 			name:        "aNegativeSizeIsRefused",
 			query:       domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionNewest, Size: -1},
 			expect:      func(pgxmock.PgxPoolIface) {},
-			wantErr:     domain.ErrInvalidRequest,
 			wantErrText: "page size",
 		},
 		{
 			name:        "aSizeOverTheMaximumIsRefused",
 			query:       domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionNewest, Size: size + 1},
 			expect:      func(pgxmock.PgxPoolIface) {},
-			wantErr:     domain.ErrInvalidRequest,
 			wantErrText: "page size",
 		},
 		{
 			name:        "aBadSizeIsRefusedBeforeTheCursorIsChecked",
-			query:       domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionBefore, CursorID: "c"},
+			query:       domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionBefore, Cursor: cursorAt("c")},
 			expect:      func(pgxmock.PgxPoolIface) {},
-			wantErr:     domain.ErrInvalidRequest,
 			wantErrText: "page size",
 		},
 		{
 			name:        "unknownDirection",
 			query:       domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: "sideways", Size: size},
 			expect:      func(pgxmock.PgxPoolIface) {},
-			wantErr:     domain.ErrInvalidRequest,
 			wantErrText: "sideways",
 		},
 		{
@@ -612,4 +583,31 @@ func TestListConversations(t *testing.T) {
 			assert.NoError(t, mock.ExpectationsWereMet())
 		})
 	}
+}
+
+func TestBrokenInvariantsAreNotTheClientsFault(t *testing.T) {
+	// A bad size or direction can only come from a caller inside the service, so it is a server
+	// error. A request the client got wrong is rejected by the service before it gets here.
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+	repo := NewPostgresMessageRepository(mock)
+
+	_, err = repo.ListMessages(context.Background(), domain.PageQuery{ConversationID: "c", Direction: domain.DirectionNewest})
+	assert.Error(t, err)
+	assert.NotErrorIs(t, err, domain.ErrInvalidRequest)
+
+	_, err = repo.ListMessages(context.Background(), domain.PageQuery{ConversationID: "c", Direction: "sideways", Size: 5})
+	assert.Error(t, err)
+	assert.NotErrorIs(t, err, domain.ErrInvalidRequest)
+
+	_, err = repo.ListConversations(context.Background(), domain.ConversationQuery{IDYapeAccount: "a", Direction: domain.DirectionNewest})
+	assert.Error(t, err)
+	assert.NotErrorIs(t, err, domain.ErrInvalidRequest)
+
+	_, err = repo.ListConversations(context.Background(), domain.ConversationQuery{IDYapeAccount: "a", Direction: "sideways", Size: 5})
+	assert.Error(t, err)
+	assert.NotErrorIs(t, err, domain.ErrInvalidRequest)
+
+	assert.NoError(t, mock.ExpectationsWereMet(), "none of them reached the database")
 }

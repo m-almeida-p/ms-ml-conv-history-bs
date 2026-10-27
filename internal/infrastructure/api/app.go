@@ -16,6 +16,11 @@ import (
 // healthTimeout bounds the database check of /health.
 const healthTimeout = 2 * time.Second
 
+// requestTimeout bounds the work of one request. The conversation list groups an account's whole
+// history, so without a bound a heavy account could hold a connection for as long as the query runs.
+// A request that runs past it is answered 503 and its query is cancelled.
+const requestTimeout = 10 * time.Second
+
 // Logger is what the server reports to.
 type Logger interface {
 	Infof(msg string, v ...any)
@@ -33,6 +38,11 @@ type Pinger func(ctx context.Context) error
 // NewServer returns the router: the two history routes and /health. It has no
 // authentication (PoC only) and publishes nothing to Kafka.
 func NewServer(history service.History, log Logger, ping Pinger) *echo.Echo {
+	return newServer(history, log, ping, requestTimeout)
+}
+
+// newServer is NewServer with the request timeout given, so a test can use a short one.
+func newServer(history service.History, log Logger, ping Pinger, timeout time.Duration) *echo.Echo {
 	e := echo.New()
 	e.HideBanner = true
 	e.HidePort = true
@@ -45,6 +55,8 @@ func NewServer(history service.History, log Logger, ping Pinger) *echo.Echo {
 		// the stack to its own logger.
 		LogErrorFunc: func(_ echo.Context, err error, _ []byte) error { return err },
 	}))
+
+	e.Use(middleware.ContextTimeoutWithConfig(middleware.ContextTimeoutConfig{Timeout: timeout}))
 
 	handler.New(history, log).Register(e)
 	e.GET("/health", health(ping))

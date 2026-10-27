@@ -87,9 +87,15 @@ func TestErrorHandlerForOtherErrors(t *testing.T) {
 		wantLogged bool
 	}{
 		{name: "badRequestFromEcho", err: echo.NewHTTPError(http.StatusBadRequest), wantStatus: http.StatusBadRequest,
-			wantJSON: problemJSON(400, "invalid-request", "Invalid request", "The request is malformed.")},
-		{name: "otherHTTPErrorUsesItsStatusPhrase", err: echo.NewHTTPError(http.StatusTeapot), wantStatus: http.StatusTeapot,
-			wantJSON: problemJSON(418, "", "I'm a teapot", "Something went wrong. Try again.")},
+			wantJSON: problemJSON(400, "invalid-request", "Invalid request", "The request is invalid.")},
+		{name: "otherClientErrorUsesItsStatusPhraseAndSaysNothingIsWrongHere", err: echo.NewHTTPError(http.StatusTeapot), wantStatus: http.StatusTeapot,
+			wantJSON: problemJSON(418, "", "I'm a teapot", "The request could not be processed.")},
+		{name: "unsupportedMediaType", err: echo.NewHTTPError(http.StatusUnsupportedMediaType), wantStatus: http.StatusUnsupportedMediaType,
+			wantJSON: problemJSON(415, "", "Unsupported Media Type", "The request could not be processed.")},
+		{name: "tooManyRequests", err: echo.NewHTTPError(http.StatusTooManyRequests), wantStatus: http.StatusTooManyRequests,
+			wantJSON: problemJSON(429, "", "Too Many Requests", "The request could not be processed.")},
+		{name: "serverErrorFromEchoIsLogged", err: echo.NewHTTPError(http.StatusBadGateway, "upstream boom"), wantStatus: http.StatusBadGateway,
+			wantJSON: problemJSON(502, "", "Bad Gateway", "Something went wrong. Try again."), wantLogged: true},
 		{name: "plainError", err: fmt.Errorf("boom"), wantStatus: http.StatusInternalServerError,
 			wantJSON: problemJSON(500, "", "Internal Server Error", "Something went wrong. Try again."), wantLogged: true},
 	}

@@ -90,18 +90,21 @@ func (s *Service) Conversations(ctx context.Context, req service.ConversationsRe
 
 	query := domain.ConversationQuery{IDYapeAccount: req.IDYapeAccount, Direction: domain.DirectionNewest, Size: size}
 
+	var rawCursor string
 	switch {
 	case req.Before != nil && req.After != nil:
 		return domain.ConversationList{}, domain.InvalidRequest("page[before] and page[after] cannot be used together")
 	case req.Before != nil:
-		query.Direction = domain.DirectionBefore
-		query.CursorID = *req.Before
+		query.Direction, rawCursor = domain.DirectionBefore, *req.Before
 	case req.After != nil:
-		query.Direction = domain.DirectionAfter
-		query.CursorID = *req.After
+		query.Direction, rawCursor = domain.DirectionAfter, *req.After
 	}
-	if query.Direction != domain.DirectionNewest && !domain.ValidIdentifier(query.CursorID) {
-		return domain.ConversationList{}, fmt.Errorf("%w: the cursor is not a conversation id", domain.ErrInvalidCursor)
+	if query.Direction != domain.DirectionNewest {
+		cursor, err := domain.ParseConversationCursor(rawCursor)
+		if err != nil {
+			return domain.ConversationList{}, err
+		}
+		query.Cursor = cursor
 	}
 
 	list, err := s.messages.ListConversations(ctx, query)
@@ -112,11 +115,16 @@ func (s *Service) Conversations(ctx context.Context, req service.ConversationsRe
 	list.Direction, list.Size = query.Direction, size
 	if n := len(list.Conversations); n > 0 {
 		// The page is most recent first: the first conversation continues forwards, the last backwards.
-		list.AfterCursor = list.Conversations[0].ConversationID
-		list.BeforeCursor = list.Conversations[n-1].ConversationID
+		list.AfterCursor = conversationCursor(list.Conversations[0]).String()
+		list.BeforeCursor = conversationCursor(list.Conversations[n-1]).String()
 	}
 
 	return list, nil
+}
+
+// conversationCursor is the position of a conversation in the list.
+func conversationCursor(c domain.ConversationSummary) domain.ConversationCursor {
+	return domain.NewConversationCursor(c.LastOccurredAt, c.ConversationID)
 }
 
 // parsePageSize reads page[size]. Absent means a full page of limit. Present, it must be

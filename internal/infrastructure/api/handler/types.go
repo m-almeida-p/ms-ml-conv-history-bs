@@ -57,7 +57,11 @@ type conversationsResponse struct {
 }
 
 type conversationResponse struct {
-	ID           string `json:"_id" example:"conv_v1_8ab59029-bc3c-4e77-b49f-9fb053d90c52"`
+	ID string `json:"_id" example:"conv_v1_8ab59029-bc3c-4e77-b49f-9fb053d90c52"`
+	// Cursor is the position of this conversation in the list when it was read. It is opaque: pass it
+	// as page[before] for the conversations older than this position or as page[after] for the more
+	// recent ones. It stays right even if the conversation receives a message later.
+	Cursor       string `json:"cursor" example:"1792771602218000~conv_v1_8ab59029-bc3c-4e77-b49f-9fb053d90c52"`
 	MessageCount int    `json:"messageCount" example:"5"`
 	// FirstReceived and LastReceived are the times of the first and last message, in Unix seconds with milliseconds.
 	FirstReceived float64 `json:"firstReceived" example:"1792505243.5"`

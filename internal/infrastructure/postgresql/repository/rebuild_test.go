@@ -64,6 +64,7 @@ func TestRebuild(t *testing.T) {
 			expect: func(m pgxmock.PgxPoolIface) {
 				m.ExpectBegin()
 				m.ExpectExec("DELETE FROM conversation_messages").WillReturnResult(pgxmock.NewResult("DELETE", 5))
+				m.ExpectExec("DELETE FROM conversation_summaries").WillReturnResult(pgxmock.NewResult("DELETE", 0))
 				m.ExpectQuery("FROM conversation_inbox").WithArgs("", -1, 2).WillReturnRows(pgxmock.NewRows(inboxColumns))
 				m.ExpectCommit()
 			},
@@ -78,8 +79,10 @@ func TestRebuild(t *testing.T) {
 				row(rows, 3, 3, "Mystery")
 				m.ExpectBegin()
 				m.ExpectExec("DELETE FROM conversation_messages").WillReturnResult(pgxmock.NewResult("DELETE", 0))
+				m.ExpectExec("DELETE FROM conversation_summaries").WillReturnResult(pgxmock.NewResult("DELETE", 0))
 				m.ExpectQuery("FROM conversation_inbox").WithArgs("", -1, 5).WillReturnRows(rows)
 				m.ExpectExec("INSERT INTO conversation_messages").WithArgs(anyArgs(11)...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
+				m.ExpectExec("INSERT INTO conversation_summaries").WithArgs(anyArgs(3)...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 				m.ExpectCommit()
 			},
 			want: domain.RebuildResult{Events: 3, Messages: 1, Invalid: 1},
@@ -95,11 +98,15 @@ func TestRebuild(t *testing.T) {
 				row(second, 3, 3, "UserMessageSent")
 				m.ExpectBegin()
 				m.ExpectExec("DELETE FROM conversation_messages").WillReturnResult(pgxmock.NewResult("DELETE", 0))
+				m.ExpectExec("DELETE FROM conversation_summaries").WillReturnResult(pgxmock.NewResult("DELETE", 0))
 				m.ExpectQuery("FROM conversation_inbox").WithArgs("", -1, 2).WillReturnRows(first)
 				m.ExpectExec("INSERT INTO conversation_messages").WithArgs(anyArgs(11)...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
+				m.ExpectExec("INSERT INTO conversation_summaries").WithArgs(anyArgs(3)...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 				m.ExpectExec("INSERT INTO conversation_messages").WithArgs(anyArgs(11)...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
+				m.ExpectExec("INSERT INTO conversation_summaries").WithArgs(anyArgs(3)...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 				m.ExpectQuery("FROM conversation_inbox").WithArgs("conv", 2, 2).WillReturnRows(second)
 				m.ExpectExec("INSERT INTO conversation_messages").WithArgs(anyArgs(11)...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
+				m.ExpectExec("INSERT INTO conversation_summaries").WithArgs(anyArgs(3)...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 				m.ExpectCommit()
 			},
 			want: domain.RebuildResult{Events: 3, Messages: 3},
@@ -113,6 +120,7 @@ func TestRebuild(t *testing.T) {
 					AddRow("conv", 1, "ToolActionSummarized", 1, json.RawMessage(`{}`), json.RawMessage(`{}`), none, none, none, none, at, "t", int32(0), int64(1))
 				m.ExpectBegin()
 				m.ExpectExec("DELETE FROM conversation_messages").WillReturnResult(pgxmock.NewResult("DELETE", 0))
+				m.ExpectExec("DELETE FROM conversation_summaries").WillReturnResult(pgxmock.NewResult("DELETE", 0))
 				m.ExpectQuery("FROM conversation_inbox").WithArgs(anyArgs(3)...).WillReturnRows(rows)
 				m.ExpectCommit()
 			},
@@ -146,6 +154,7 @@ func TestRebuild(t *testing.T) {
 			expect: func(m pgxmock.PgxPoolIface) {
 				m.ExpectBegin()
 				m.ExpectExec("DELETE FROM conversation_messages").WillReturnResult(pgxmock.NewResult("DELETE", 0))
+				m.ExpectExec("DELETE FROM conversation_summaries").WillReturnResult(pgxmock.NewResult("DELETE", 0))
 				m.ExpectQuery("FROM conversation_inbox").WithArgs(anyArgs(3)...).WillReturnError(dbDown)
 				m.ExpectRollback()
 			},
@@ -159,6 +168,7 @@ func TestRebuild(t *testing.T) {
 					AddRow("conv", "not a number", "E", 1, json.RawMessage(`{}`), json.RawMessage(`{}`), nil, nil, nil, nil, at, "t", int32(0), int64(1))
 				m.ExpectBegin()
 				m.ExpectExec("DELETE FROM conversation_messages").WillReturnResult(pgxmock.NewResult("DELETE", 0))
+				m.ExpectExec("DELETE FROM conversation_summaries").WillReturnResult(pgxmock.NewResult("DELETE", 0))
 				m.ExpectQuery("FROM conversation_inbox").WithArgs(anyArgs(3)...).WillReturnRows(rows)
 				m.ExpectRollback()
 			},
@@ -171,10 +181,22 @@ func TestRebuild(t *testing.T) {
 				rows := row(pgxmock.NewRows(inboxColumns), 1, 1, "UserMessageSent").RowError(1, dbDown)
 				m.ExpectBegin()
 				m.ExpectExec("DELETE FROM conversation_messages").WillReturnResult(pgxmock.NewResult("DELETE", 0))
+				m.ExpectExec("DELETE FROM conversation_summaries").WillReturnResult(pgxmock.NewResult("DELETE", 0))
 				m.ExpectQuery("FROM conversation_inbox").WithArgs(anyArgs(3)...).WillReturnRows(rows)
 				m.ExpectRollback()
 			},
 			wantErr: "read inbox batch", wantIs: dbDown,
+		},
+		{
+			name:      "emptyingTheSummariesFailsAndRollsBack",
+			batchSize: 2,
+			expect: func(m pgxmock.PgxPoolIface) {
+				m.ExpectBegin()
+				m.ExpectExec("DELETE FROM conversation_messages").WillReturnResult(pgxmock.NewResult("DELETE", 0))
+				m.ExpectExec("DELETE FROM conversation_summaries").WillReturnError(dbDown)
+				m.ExpectRollback()
+			},
+			wantErr: "empty conversation summaries",
 		},
 		{
 			name:      "projectionFailureRollsBack",
@@ -183,6 +205,7 @@ func TestRebuild(t *testing.T) {
 			expect: func(m pgxmock.PgxPoolIface) {
 				m.ExpectBegin()
 				m.ExpectExec("DELETE FROM conversation_messages").WillReturnResult(pgxmock.NewResult("DELETE", 0))
+				m.ExpectExec("DELETE FROM conversation_summaries").WillReturnResult(pgxmock.NewResult("DELETE", 0))
 				m.ExpectQuery("FROM conversation_inbox").WithArgs(anyArgs(3)...).WillReturnRows(row(pgxmock.NewRows(inboxColumns), 1, 1, "UserMessageSent"))
 				m.ExpectRollback()
 			},
@@ -194,6 +217,7 @@ func TestRebuild(t *testing.T) {
 			expect: func(m pgxmock.PgxPoolIface) {
 				m.ExpectBegin()
 				m.ExpectExec("DELETE FROM conversation_messages").WillReturnResult(pgxmock.NewResult("DELETE", 0))
+				m.ExpectExec("DELETE FROM conversation_summaries").WillReturnResult(pgxmock.NewResult("DELETE", 0))
 				m.ExpectQuery("FROM conversation_inbox").WithArgs(anyArgs(3)...).WillReturnRows(row(pgxmock.NewRows(inboxColumns), 1, 1, "UserMessageSent"))
 				m.ExpectExec("INSERT INTO conversation_messages").WithArgs(anyArgs(11)...).WillReturnError(dbDown)
 				m.ExpectRollback()
@@ -206,6 +230,7 @@ func TestRebuild(t *testing.T) {
 			expect: func(m pgxmock.PgxPoolIface) {
 				m.ExpectBegin()
 				m.ExpectExec("DELETE FROM conversation_messages").WillReturnResult(pgxmock.NewResult("DELETE", 0))
+				m.ExpectExec("DELETE FROM conversation_summaries").WillReturnResult(pgxmock.NewResult("DELETE", 0))
 				m.ExpectQuery("FROM conversation_inbox").WithArgs(anyArgs(3)...).WillReturnRows(pgxmock.NewRows(inboxColumns))
 				m.ExpectCommit().WillReturnError(dbDown)
 				m.ExpectRollback()
@@ -258,6 +283,7 @@ func TestRebuildStopsWhenTheContextIsCancelled(t *testing.T) {
 		AddRow("conv", 2, "UserMessageSent", 1, json.RawMessage(`{}`), json.RawMessage(`{}`), nil, nil, nil, nil, at, "t", int32(0), int64(2))
 	mock.ExpectBegin()
 	mock.ExpectExec("DELETE FROM conversation_messages").WillReturnResult(pgxmock.NewResult("DELETE", 0))
+	mock.ExpectExec("DELETE FROM conversation_summaries").WillReturnResult(pgxmock.NewResult("DELETE", 0))
 	mock.ExpectQuery("FROM conversation_inbox").WithArgs(anyArgs(3)...).WillReturnRows(rows)
 	mock.ExpectRollback()
 

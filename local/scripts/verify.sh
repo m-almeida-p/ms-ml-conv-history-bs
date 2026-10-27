@@ -8,6 +8,7 @@
 #      messages of the event store, with the same text, event and position;
 #   3. no text of a blocked input, a tool summary or a notification is in the history
 #      or in any API reply;
+#   3b. conversation_summaries, which the list reads, equals what grouping the messages gives;
 #   4. the API serves each conversation completely (it follows the Link header, rel="prev");
 #   5. `consumer rebuild` reproduces the messages table.
 # Settings (environment): PG_CONTAINER (yape-postgres), API_URL (http://localhost:3100),
@@ -21,6 +22,10 @@ API_URL="${API_URL:-http://localhost:3100}"
 REBUILD="${REBUILD:-yes}"
 WAIT_SECONDS="${WAIT_SECONDS:-60}"
 PAGE_SIZE="${PAGE_SIZE:-}"
+if [[ -n "${PAGE_SIZE}" && ! "${PAGE_SIZE}" =~ ^[1-9][0-9]?$|^100$ ]]; then
+  echo "PAGE_SIZE must be a whole number from 1 to 100, got '${PAGE_SIZE}'" >&2
+  exit 2
+fi
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 psql_q() { docker exec -i "${PG_CONTAINER}" psql -U postgres -d postgres -v ON_ERROR_STOP=1 -At -F '|' "$@"; }
@@ -96,6 +101,22 @@ while IFS='|' read -r conv expected stored textdiff missing_c extra <&3; do
 done 3<<<"${rows}" # fd 3, so docker exec -i inside the loop cannot eat the rows
 [[ "${api_up}" == yes || "${REQUIRE_API:-}" != 1 ]] || note "the API is not answering and REQUIRE_API=1"
 
+echo
+echo "== 2b. Conversation summaries equal what grouping the messages gives"
+summary_drift="$(psql_q -c "
+  SELECT count(*) FROM (
+    (SELECT id_yape_account, conversation_id, count(*)::int, min(occurred_at), max(occurred_at)
+       FROM conversation_messages WHERE id_yape_account IS NOT NULL GROUP BY id_yape_account, conversation_id
+     EXCEPT
+     SELECT id_yape_account, conversation_id, message_count, first_occurred_at, last_occurred_at FROM conversation_summaries)
+    UNION ALL
+    (SELECT id_yape_account, conversation_id, message_count, first_occurred_at, last_occurred_at FROM conversation_summaries
+     EXCEPT
+     SELECT id_yape_account, conversation_id, count(*)::int, min(occurred_at), max(occurred_at)
+       FROM conversation_messages WHERE id_yape_account IS NOT NULL GROUP BY id_yape_account, conversation_id)
+  ) drift")"
+echo "  summaries-differing-from-messages=${summary_drift}"
+[[ "${summary_drift}" == 0 ]] || note "${summary_drift} conversation summaries differ from their messages; go run ./cmd/consumer rebuild repairs them"
 echo
 echo "== 3. Nothing from blocked inputs, tool summaries or notifications"
 forbidden="$(psql_q <<'SQL'

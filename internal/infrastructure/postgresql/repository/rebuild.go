@@ -10,8 +10,8 @@ import (
 	"github.com/yaperos/ms-ml-conv-history-bs/internal/core/domain"
 )
 
-// Rebuild implements repository.InboxRepository. It empties the messages and
-// replays the inbox in keyset batches ordered by (conversation_id, sequence),
+// Rebuild implements repository.InboxRepository. It empties the messages and their
+// conversation summaries and replays the inbox in keyset batches ordered by (conversation_id, sequence),
 // all in one transaction, so readers see the old messages until the commit.
 func (r *PostgresInboxRepository) Rebuild(ctx context.Context, project func(domain.InboxEvent) (*domain.Message, error)) (domain.RebuildResult, error) {
 	tx, err := r.db.Begin(ctx)
@@ -20,8 +20,12 @@ func (r *PostgresInboxRepository) Rebuild(ctx context.Context, project func(doma
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	// The summaries go with the messages, and the replay counts them again as it writes the messages.
 	if _, err := tx.Exec(ctx, sqlDeleteMessages); err != nil {
 		return domain.RebuildResult{}, dbError("empty messages", err)
+	}
+	if _, err := tx.Exec(ctx, sqlDeleteConversationSummaries); err != nil {
+		return domain.RebuildResult{}, dbError("empty conversation summaries", err)
 	}
 
 	var (

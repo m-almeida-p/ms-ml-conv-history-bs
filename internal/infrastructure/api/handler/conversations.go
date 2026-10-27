@@ -16,47 +16,35 @@ import (
 // conversations only; the way to another page is the Link header.
 //
 // @Summary List the conversations of an account
-// @Description Returns up to 100 conversations of the account that have chat messages, the most recent first, with their message count and the times of their first and last message. Without a cursor it returns the most recent page. page[before] returns the conversations just older than the given one (less recently active), page[after] the ones just more recent. Send at most one of them, once, with a conversation _id of this account. page[size] (1 to 100, default 100) says how many. The body holds only the conversations; more pages are announced in the Link header: rel="prev" (older conversations) on the most recent and before pages, rel="next" (more recent ones) on after pages, present only when there are more. The last page has no Link header. A page past the last conversation is an empty array.
+// @Description Returns up to 100 conversations of the account that have chat messages, the most recent first, with their message count and the times of their first and last message. Without a cursor it returns the most recent page. page[before] returns the conversations just older than the given one (less recently active), page[after] the ones just more recent. Send at most one of them, once, with a cursor from this API: the `cursor` of a conversation, or the one in a Link header. A cursor is a position, so it stays right even if its conversation receives a message and moves to the top. page[size] (1 to 100, default 100) says how many. The body holds only the conversations; more pages are announced in the Link header: rel="prev" (older conversations) on the most recent and before pages, rel="next" (more recent ones) on after pages, present only when there are more. The last page has no Link header. A page past the last conversation is an empty array.
 // @Tags Conversations
 // @Param idYapeAccount query string true "Customer account (letters, digits, . _ : -, up to 128 characters), sent once"
-// @Param page[before] query string false "Conversation _id: read the page of conversations older than it"
-// @Param page[after] query string false "Conversation _id: read the page of conversations more recent than it"
+// @Param page[before] query string false "Cursor: read the page of conversations older than this position. Use the cursor of a conversation or the one in the Link header; it is opaque"
+// @Param page[after] query string false "Cursor: read the page of conversations more recent than this position. Use the cursor of a conversation; it is opaque"
 // @Param page[size] query int false "How many conversations the page holds, from 1 to 100 (default 100); the Link header repeats it when it is not the default" minimum(1) maximum(100) default(100)
 // @Produce json
 // @Produce application/problem+json
 // @Success 200 {object} conversationsResponse
-// @Header 200 {string} Link "Only when more conversations exist in the direction read: rel=prev (older) on most recent and before pages, rel=next (more recent) on after pages. The target is this route with idYapeAccount and page[before] or page[after] set to the _id of the oldest or most recent conversation of the page, and page[size] repeated when it is not 100."
-// @Failure 400 {object} problemResponse "Problem details (RFC 9457). Type invalid-request: account missing or malformed, both cursors, a parameter sent twice, a page[size] outside 1 to 100. Type invalid-cursor: empty, malformed, or not a conversation of this account"
+// @Header 200 {string} Link "Only when more conversations exist in the direction read: rel=prev (older) on most recent and before pages, rel=next (more recent) on after pages. The target is this route with idYapeAccount and page[before] or page[after] set to the cursor of the oldest or most recent conversation of the page, and page[size] repeated when it is not 100."
+// @Failure 400 {object} problemResponse "Problem details (RFC 9457). Type invalid-request: account missing or malformed, both cursors, a parameter sent twice, a page[size] outside 1 to 100. Type invalid-cursor: empty or not a cursor this API issues for the conversation list"
 // @Failure 500 {object} problemResponse "Problem details (RFC 9457), type about:blank"
 // @Router /v1/conversations [get]
 func (h *Handler) Conversations(c echo.Context) error {
-	account, err := queryOnce(c, "idYapeAccount")
-	if err != nil {
-		return h.fail(c, err)
-	}
-	before, err := queryOnce(c, "page[before]")
-	if err != nil {
-		return h.fail(c, err)
-	}
-	after, err := queryOnce(c, "page[after]")
-	if err != nil {
-		return h.fail(c, err)
-	}
-	size, err := queryOnce(c, "page[size]")
+	params, err := queryParams(c, "idYapeAccount", "page[before]", "page[after]", "page[size]")
 	if err != nil {
 		return h.fail(c, err)
 	}
 
 	var idYapeAccount string
-	if account != nil {
-		idYapeAccount = *account
+	if params[0] != nil {
+		idYapeAccount = *params[0]
 	}
 
 	list, err := h.history.Conversations(c.Request().Context(), service.ConversationsRequest{
 		IDYapeAccount: idYapeAccount,
-		Before:        before,
-		After:         after,
-		Size:          size,
+		Before:        params[1],
+		After:         params[2],
+		Size:          params[3],
 	})
 	if err != nil {
 		return h.failWithCursor(c, err, detailConversationsCursor)
@@ -76,7 +64,10 @@ func (h *Handler) Conversations(c echo.Context) error {
 // following the link keeps the size the client chose. The account and the ids hold only
 // letters, digits and . _ : -, which the service checked, so nothing needs escaping.
 func conversationsContinuation(idYapeAccount string, list domain.ConversationList) string {
-	if !list.HasMore {
+	// The account comes from the request and goes into a header unescaped. The service has
+	// validated it, and this keeps the link safe even if that ever changes. The cursors are
+	// written by the service from validated parts.
+	if !list.HasMore || !domain.ValidIdentifier(idYapeAccount) {
 		return ""
 	}
 
@@ -98,6 +89,7 @@ func toConversationsResponse(list domain.ConversationList) conversationsResponse
 	for _, conv := range list.Conversations {
 		conversations = append(conversations, conversationResponse{
 			ID:            conv.ConversationID,
+			Cursor:        domain.NewConversationCursor(conv.LastOccurredAt, conv.ConversationID).String(),
 			MessageCount:  conv.MessageCount,
 			FirstReceived: unixSeconds(conv.FirstOccurredAt),
 			LastReceived:  unixSeconds(conv.LastOccurredAt),

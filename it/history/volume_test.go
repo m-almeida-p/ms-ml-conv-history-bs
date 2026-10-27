@@ -59,7 +59,8 @@ func loadVolume(t *testing.T, pool *pgxpool.Pool) {
 		SELECT conversation_id, sequence, 'appUser', id_yape_account, 'x', event_name, id_yape_account, flow, occurred_at
 		FROM conversation_inbox WHERE event_name IN ('UserMessageSent', 'AgentMessageSent')`)
 	require.NoError(t, err)
-	_, err = pool.Exec(context.Background(), `ANALYZE conversation_inbox; ANALYZE conversation_messages`)
+	refreshSummaries(t, pool)
+	_, err = pool.Exec(context.Background(), `ANALYZE conversation_inbox; ANALYZE conversation_messages; ANALYZE conversation_summaries`)
 	require.NoError(t, err)
 
 	t.Logf("loaded %d events in %s", volumeConversations*volumeEventsEach, time.Since(started).Round(time.Millisecond))

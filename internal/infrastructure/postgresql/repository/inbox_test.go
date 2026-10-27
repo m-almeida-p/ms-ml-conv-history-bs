@@ -56,7 +56,8 @@ func TestApply(t *testing.T) {
 			expect: func(m pgxmock.PgxPoolIface) {
 				m.ExpectBegin()
 				m.ExpectExec("INSERT INTO conversation_inbox").WithArgs(insertArgs...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
-				m.ExpectExec("INSERT INTO conversation_messages").WithArgs(upsertArgs...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
+				m.ExpectExec("INSERT INTO conversation_messages[\\s\\S]*DO NOTHING").WithArgs(upsertArgs...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
+				m.ExpectExec("INSERT INTO conversation_summaries").WithArgs("acc-1", "conv_v1_a", occurredAt).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 				m.ExpectCommit()
 			},
 			want: domain.ApplyResult{Applied: true, Projected: true},
@@ -126,7 +127,50 @@ func TestApply(t *testing.T) {
 			expect: func(m pgxmock.PgxPoolIface) {
 				m.ExpectBegin()
 				m.ExpectExec("INSERT INTO conversation_inbox").WithArgs(insertArgs...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
-				m.ExpectExec("INSERT INTO conversation_messages").WithArgs(upsertArgs...).WillReturnError(dbDown)
+				m.ExpectExec("INSERT INTO conversation_messages[\\s\\S]*DO NOTHING").WithArgs(upsertArgs...).WillReturnError(dbDown)
+				m.ExpectRollback()
+			},
+			wantErr: "upsert message of event yape.public.conversation_events/1/7",
+		},
+		{
+			name:    "aMessageAlreadyStoredIsRefreshedAndNotCountedAgain",
+			event:   event,
+			message: message,
+			expect: func(m pgxmock.PgxPoolIface) {
+				m.ExpectBegin()
+				m.ExpectExec("INSERT INTO conversation_inbox").WithArgs(insertArgs...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
+				m.ExpectExec("INSERT INTO conversation_messages[\\s\\S]*DO NOTHING").WithArgs(upsertArgs...).WillReturnResult(pgxmock.NewResult("INSERT", 0))
+				m.ExpectExec("INSERT INTO conversation_messages[\\s\\S]*DO UPDATE").WithArgs(upsertArgs...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
+				m.ExpectCommit() // no INSERT INTO conversation_summaries: it was counted when it first arrived
+			},
+			want: domain.ApplyResult{Applied: true, Projected: true},
+		},
+		{
+			name:  "aMessageWithNoAccountIsStoredAndBelongsToNoList",
+			event: event,
+			message: &domain.Message{
+				ConversationID: "conv_v1_a", Sequence: 2, Role: domain.RoleMaker, AuthorID: "ms-ml-genai-agent-bs",
+				Type: "text", Text: "hola", EventName: "GuardrailResponseSent", OccurredAt: occurredAt,
+			},
+			expect: func(m pgxmock.PgxPoolIface) {
+				m.ExpectBegin()
+				m.ExpectExec("INSERT INTO conversation_inbox").WithArgs(insertArgs...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
+				m.ExpectExec("INSERT INTO conversation_messages[\\s\\S]*DO NOTHING").
+					WithArgs("conv_v1_a", 2, "appMaker", "ms-ml-genai-agent-bs", "text", "hola", false, "GuardrailResponseSent", (*string)(nil), (*string)(nil), occurredAt).
+					WillReturnResult(pgxmock.NewResult("INSERT", 1))
+				m.ExpectCommit() // no INSERT INTO conversation_summaries: there is no account to list it under
+			},
+			want: domain.ApplyResult{Applied: true, Projected: true},
+		},
+		{
+			name:    "countingTheMessageFailsAndRollsBackWithTheMessage",
+			event:   event,
+			message: message,
+			expect: func(m pgxmock.PgxPoolIface) {
+				m.ExpectBegin()
+				m.ExpectExec("INSERT INTO conversation_inbox").WithArgs(insertArgs...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
+				m.ExpectExec("INSERT INTO conversation_messages[\\s\\S]*DO NOTHING").WithArgs(upsertArgs...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
+				m.ExpectExec("INSERT INTO conversation_summaries").WithArgs("acc-1", "conv_v1_a", occurredAt).WillReturnError(dbDown)
 				m.ExpectRollback()
 			},
 			wantErr: "upsert message of event yape.public.conversation_events/1/7",
@@ -138,7 +182,8 @@ func TestApply(t *testing.T) {
 			expect: func(m pgxmock.PgxPoolIface) {
 				m.ExpectBegin()
 				m.ExpectExec("INSERT INTO conversation_inbox").WithArgs(insertArgs...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
-				m.ExpectExec("INSERT INTO conversation_messages").WithArgs(upsertArgs...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
+				m.ExpectExec("INSERT INTO conversation_messages[\\s\\S]*DO NOTHING").WithArgs(upsertArgs...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
+				m.ExpectExec("INSERT INTO conversation_summaries").WithArgs("acc-1", "conv_v1_a", occurredAt).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 				m.ExpectCommit().WillReturnError(dbDown)
 				m.ExpectRollback()
 			},
@@ -245,7 +290,7 @@ func TestApplyWriteErrors(t *testing.T) {
 				mock.ExpectExec("INSERT INTO conversation_inbox").WithArgs(anyArgs(14)...).WillReturnError(tt.err)
 			} else {
 				mock.ExpectExec("INSERT INTO conversation_inbox").WithArgs(anyArgs(14)...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
-				mock.ExpectExec("INSERT INTO conversation_messages").WithArgs(anyArgs(11)...).WillReturnError(tt.err)
+				mock.ExpectExec("INSERT INTO conversation_messages[\\s\\S]*DO NOTHING").WithArgs(anyArgs(11)...).WillReturnError(tt.err)
 			}
 			mock.ExpectRollback()
 

@@ -21,6 +21,13 @@ definitions:
       _id:
         example: conv_v1_8ab59029-bc3c-4e77-b49f-9fb053d90c52
         type: string
+      cursor:
+        description: |-
+          Cursor is the position of this conversation in the list when it was read. It is opaque: pass it
+          as page[before] for the conversations older than this position or as page[after] for the more
+          recent ones. It stays right even if the conversation receives a message later.
+        example: 1792771602218000~conv_v1_8ab59029-bc3c-4e77-b49f-9fb053d90c52
+        type: string
       firstReceived:
         description: FirstReceived and LastReceived are the times of the first and
           last message, in Unix seconds with milliseconds.
@@ -177,7 +184,9 @@ paths:
         their first and last message. Without a cursor it returns the most recent
         page. page[before] returns the conversations just older than the given one
         (less recently active), page[after] the ones just more recent. Send at most
-        one of them, once, with a conversation _id of this account. page[size] (1
+        one of them, once, with a cursor from this API: the `cursor` of a conversation,
+        or the one in a Link header. A cursor is a position, so it stays right even
+        if its conversation receives a message and moves to the top. page[size] (1
         to 100, default 100) says how many. The body holds only the conversations;
         more pages are announced in the Link header: rel="prev" (older conversations)
         on the most recent and before pages, rel="next" (more recent ones) on after
@@ -190,13 +199,13 @@ paths:
         name: idYapeAccount
         required: true
         type: string
-      - description: 'Conversation _id: read the page of conversations older than
-          it'
+      - description: 'Cursor: read the page of conversations older than this position.
+          Use the cursor of a conversation or the one in the Link header; it is opaque'
         in: query
         name: page[before]
         type: string
-      - description: 'Conversation _id: read the page of conversations more recent
-          than it'
+      - description: 'Cursor: read the page of conversations more recent than this
+          position. Use the cursor of a conversation; it is opaque'
         in: query
         name: page[after]
         type: string
@@ -219,7 +228,7 @@ paths:
               description: 'Only when more conversations exist in the direction read:
                 rel=prev (older) on most recent and before pages, rel=next (more recent)
                 on after pages. The target is this route with idYapeAccount and page[before]
-                or page[after] set to the _id of the oldest or most recent conversation
+                or page[after] set to the cursor of the oldest or most recent conversation
                 of the page, and page[size] repeated when it is not 100.'
               type: string
           schema:
@@ -227,8 +236,8 @@ paths:
         "400":
           description: 'Problem details (RFC 9457). Type invalid-request: account
             missing or malformed, both cursors, a parameter sent twice, a page[size]
-            outside 1 to 100. Type invalid-cursor: empty, malformed, or not a conversation
-            of this account'
+            outside 1 to 100. Type invalid-cursor: empty or not a cursor this API
+            issues for the conversation list'
           schema:
             $ref: '#/definitions/handler.problemResponse'
         "500":

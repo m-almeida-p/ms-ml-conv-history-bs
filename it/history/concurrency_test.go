@@ -61,7 +61,7 @@ func TestConcurrentWriters(t *testing.T) {
 	events := longStream()
 
 	reset := func() {
-		_, err := pool.Exec(ctx, "TRUNCATE conversation_messages, conversation_inbox")
+		_, err := pool.Exec(ctx, "TRUNCATE conversation_summaries, conversation_messages, conversation_inbox")
 		require.NoError(t, err)
 	}
 	handle := func(e domain.InboxEvent) (domain.ApplyResult, error) { return service.Handle(ctx, e) }

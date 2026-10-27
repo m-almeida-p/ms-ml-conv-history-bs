@@ -29,12 +29,13 @@ const (
 // they say what is wrong, not with which value.
 const (
 	detailMessagesCursor      = "page[before] or page[after] is not the _id of a message in this conversation."
-	detailConversationsCursor = "page[before] or page[after] is not the _id of a conversation of this account."
+	detailConversationsCursor = "page[before] or page[after] is not a cursor from the conversation list."
 	detailNoMessages          = "No chat messages were found for this conversation."
 	detailNothingHere         = "There is nothing at this path."
 	detailMethodNotAllowed    = "This path does not accept this method."
-	detailMalformed           = "The request is malformed."
 	detailInvalidRequest      = "The request is invalid."
+	detailClientError         = "The request could not be processed."
+	detailTimeout             = "The request took too long. Try again."
 	detailServerError         = "Something went wrong. Try again."
 )
 

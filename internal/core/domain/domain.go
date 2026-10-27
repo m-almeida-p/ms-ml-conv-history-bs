@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -221,15 +223,52 @@ type ConversationSummary struct {
 	LastOccurredAt  time.Time
 }
 
-// ConversationQuery asks for one page of an account's conversations. CursorID is
-// the id of a conversation of that account and is ignored for DirectionNewest.
-// Before reads the conversations older than the cursor (less recently active),
-// After the ones more recently active. Size is how many to return, from 1 to
-// ConversationListSize.
+// ConversationCursor is a position in an account's list of conversations: the time of a
+// conversation's last message and its id as the tie-break. It is the cursor the API issues, and
+// it carries the position itself, so it stays right even when the conversation it came from
+// receives a message and moves to the top. A client treats it as opaque and never builds one.
+type ConversationCursor struct {
+	LastOccurredAt time.Time
+	ConversationID string
+}
+
+// cursorSeparator splits the instant from the id. It is not a character an id may hold, and it
+// needs no escaping in a URL.
+const cursorSeparator = "~"
+
+// maxCursorMicros is the last instant of the year 9999, in Unix microseconds.
+const maxCursorMicros = 253402300799999999
+
+// NewConversationCursor returns the cursor of a conversation whose last message was at the given time.
+func NewConversationCursor(lastOccurredAt time.Time, conversationID string) ConversationCursor {
+	return ConversationCursor{LastOccurredAt: lastOccurredAt.UTC(), ConversationID: conversationID}
+}
+
+// String renders the cursor: the instant in Unix microseconds, the separator and the id.
+func (c ConversationCursor) String() string {
+	return strconv.FormatInt(c.LastOccurredAt.UnixMicro(), 10) + cursorSeparator + c.ConversationID
+}
+
+// ParseConversationCursor reads a cursor back. Only the form String writes is accepted, so "+5",
+// "05" or an id with characters outside ValidIdentifier are not cursors. It returns ErrInvalidCursor otherwise.
+func ParseConversationCursor(cursor string) (ConversationCursor, error) {
+	instant, id, found := strings.Cut(cursor, cursorSeparator)
+	micros, err := strconv.ParseInt(instant, 10, 64)
+	if !found || err != nil || micros < 1 || micros > maxCursorMicros || strconv.FormatInt(micros, 10) != instant || !ValidIdentifier(id) {
+		return ConversationCursor{}, fmt.Errorf("%w: the cursor is not a conversation list cursor", ErrInvalidCursor)
+	}
+
+	return ConversationCursor{LastOccurredAt: time.UnixMicro(micros).UTC(), ConversationID: id}, nil
+}
+
+// ConversationQuery asks for one page of an account's conversations. Cursor is the position to
+// read from and is ignored for DirectionNewest. Before reads the conversations older than the
+// cursor (less recently active), After the ones more recently active. Size is how many to return,
+// from 1 to ConversationListSize.
 type ConversationQuery struct {
 	IDYapeAccount string
 	Direction     Direction
-	CursorID      string
+	Cursor        ConversationCursor
 	Size          int
 }
 
@@ -243,9 +282,9 @@ type ConversationList struct {
 	// HasMore is true when older conversations exist (newest and before pages) or more
 	// recent ones exist (after pages): the direction the caller is walking.
 	HasMore bool
-	// BeforeCursor is the id of the oldest conversation of the page, the one that
-	// continues backwards; AfterCursor is the id of the most recent one, the one that
-	// continues forwards. Both are empty for an empty page.
+	// BeforeCursor is the cursor of the oldest conversation of the page, the one that
+	// continues backwards; AfterCursor is the cursor of the most recent one, the one that
+	// continues forwards. Both are in ConversationCursor form and empty for an empty page.
 	BeforeCursor string
 	AfterCursor  string
 }

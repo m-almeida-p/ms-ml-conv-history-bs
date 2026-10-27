@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -51,6 +52,7 @@ func TestRead(t *testing.T) {
 		       ('other', 1, 'appUser', 'a', 'x', 'UserMessageSent', 'acc-2', '2026-10-20T13:00:00Z'),
 		       ('noaccount', 1, 'appMaker', 'a', 'y', 'GuardrailResponseSent', NULL, '2026-10-20T13:30:00Z')`)
 	require.NoError(t, err)
+	refreshSummaries(t, pool)
 
 	t.Run("pages", func(t *testing.T) {
 		tests := []struct {
@@ -211,6 +213,7 @@ func TestRead(t *testing.T) {
 			SELECT 'many-' || lpad(s::text, 3, '0'), 1, 'appUser', 'a', 'x', 'UserMessageSent', 'acc-many', '2026-10-21T00:00:00Z'::timestamptz + s * interval '1 second'
 			FROM generate_series(1, 120) s`)
 		require.NoError(t, err)
+		refreshSummaries(t, pool)
 
 		list, err := repo.ListConversations(ctx, domain.ConversationQuery{IDYapeAccount: "acc-many", Direction: domain.DirectionNewest, Size: domain.ConversationListSize})
 
@@ -229,8 +232,21 @@ func TestRead(t *testing.T) {
 
 		return ids
 	}
-	conversations := func(account string, direction domain.Direction, cursor string, size int) (domain.ConversationList, error) {
-		return repo.ListConversations(ctx, domain.ConversationQuery{IDYapeAccount: account, Direction: direction, CursorID: cursor, Size: size})
+	// positionOf is the cursor of a conversation as it stands now: the time of its last message and its id.
+	positionOf := func(id string) domain.ConversationCursor {
+		var last time.Time
+		require.NoError(t, pool.QueryRow(ctx, `SELECT max(occurred_at) FROM conversation_messages WHERE conversation_id = $1`, id).Scan(&last))
+
+		return domain.NewConversationCursor(last, id)
+	}
+	// conversations reads a page; cursorID names the conversation whose current position is the cursor.
+	conversations := func(account string, direction domain.Direction, cursorID string, size int) (domain.ConversationList, error) {
+		query := domain.ConversationQuery{IDYapeAccount: account, Direction: direction, Size: size}
+		if cursorID != "" {
+			query.Cursor = positionOf(cursorID)
+		}
+
+		return repo.ListConversations(ctx, query)
 	}
 
 	t.Run("conversationPages", func(t *testing.T) {
@@ -264,23 +280,77 @@ func TestRead(t *testing.T) {
 		}
 	})
 
-	t.Run("aCursorMustBeAConversationOfTheSameAccount", func(t *testing.T) {
-		for _, tt := range []struct {
-			name, account, cursor string
-			direction             domain.Direction
-		}{
-			{"anotherAccountsConversationBefore", "acc-1", "other", domain.DirectionBefore},
-			{"anotherAccountsConversationAfter", "acc-1", "other", domain.DirectionAfter},
-			{"aConversationThatDoesNotExist", "acc-1", "nope", domain.DirectionBefore},
-			{"anAccountWithNoConversations", "nobody", "exact", domain.DirectionAfter},
-			{"aMessagesOnlyIdIsNotAConversationOfNoAccount", "acc-1", "noaccount", domain.DirectionBefore},
-		} {
-			t.Run(tt.name, func(t *testing.T) {
-				_, err := conversations(tt.account, tt.direction, tt.cursor, 5)
+	t.Run("aCursorIsAPositionAndNeedsNoConversationOfTheAccount", func(t *testing.T) {
+		// "other" belongs to another account and is more recent than all three of acc-1's: as a cursor
+		// it is only the position 2026-10-20T13:00:00Z, which says nothing about the other account.
+		older, err := conversations("acc-1", domain.DirectionBefore, "other", 10)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"exact", "small", "big"}, idsOf(older))
 
-				require.ErrorIs(t, err, domain.ErrInvalidCursor)
-			})
-		}
+		newer, err := conversations("acc-1", domain.DirectionAfter, "other", 10)
+		require.NoError(t, err)
+		assert.Empty(t, newer.Conversations)
+
+		// A position that no conversation holds works the same.
+		between, err := repo.ListConversations(ctx, domain.ConversationQuery{
+			IDYapeAccount: "acc-1", Direction: domain.DirectionBefore, Size: 10,
+			Cursor: domain.NewConversationCursor(time.Date(2026, 10, 20, 11, 30, 0, 0, time.UTC), "zzz"),
+		})
+		require.NoError(t, err)
+		assert.Equal(t, []string{"small", "big"}, idsOf(between), "the conversations last active before 11:30 are small (11:05) and big (10:04)")
+	})
+
+	t.Run("aConversationThatMovesBetweenPagesDoesNotRepeatOrSkipAnyOther", func(t *testing.T) {
+		// Four conversations, newest first: c4 c3 c2 c1. The client reads two, then c3 (the cursor of
+		// page 1) receives a message and jumps to the top before the client asks for page 2.
+		_, err := pool.Exec(ctx, `
+			INSERT INTO conversation_messages (conversation_id, sequence, role, author_id, text, event_name, id_yape_account, occurred_at)
+			VALUES ('move-c1', 1, 'appUser', 'a', 'x', 'UserMessageSent', 'acc-move', '2026-10-27T10:00:00Z'),
+			       ('move-c2', 1, 'appUser', 'a', 'x', 'UserMessageSent', 'acc-move', '2026-10-27T11:00:00Z'),
+			       ('move-c3', 1, 'appUser', 'a', 'x', 'UserMessageSent', 'acc-move', '2026-10-27T12:00:00Z'),
+			       ('move-c4', 1, 'appUser', 'a', 'x', 'UserMessageSent', 'acc-move', '2026-10-27T13:00:00Z')`)
+		require.NoError(t, err)
+		refreshSummaries(t, pool)
+
+		page1, err := repo.ListConversations(ctx, domain.ConversationQuery{IDYapeAccount: "acc-move", Direction: domain.DirectionNewest, Size: 2})
+		require.NoError(t, err)
+		require.Equal(t, []string{"move-c4", "move-c3"}, idsOf(page1))
+		oldest := page1.Conversations[1]
+		cursor := domain.NewConversationCursor(oldest.LastOccurredAt, oldest.ConversationID) // what the Link carries
+
+		_, err = pool.Exec(ctx, `INSERT INTO conversation_messages (conversation_id, sequence, role, author_id, text, event_name, id_yape_account, occurred_at)
+			VALUES ('move-c3', 2, 'appUser', 'a', 'again', 'UserMessageSent', 'acc-move', '2026-10-27T14:00:00Z')`)
+		require.NoError(t, err)
+		refreshSummaries(t, pool)
+
+		page2, err := repo.ListConversations(ctx, domain.ConversationQuery{IDYapeAccount: "acc-move", Direction: domain.DirectionBefore, Cursor: cursor, Size: 2})
+		require.NoError(t, err)
+		assert.Equal(t, []string{"move-c2", "move-c1"}, idsOf(page2), "page 2 is where page 1 ended, whatever happened to the cursor conversation since")
+	})
+
+	t.Run("catchUpFromTheCursorOfAConversationThatMovedFindsItAndTheOnesBeforeIt", func(t *testing.T) {
+		// The client saw c4 at the top with the cursor it was given. Later c3 jumped above it. Reading
+		// "after" that cursor returns what is more recent than where c4 stood, not than where it is now.
+		_, err := pool.Exec(ctx, `
+			INSERT INTO conversation_messages (conversation_id, sequence, role, author_id, text, event_name, id_yape_account, occurred_at)
+			VALUES ('catch-c1', 1, 'appUser', 'a', 'x', 'UserMessageSent', 'acc-catch', '2026-10-27T10:00:00Z')`)
+		require.NoError(t, err)
+		refreshSummaries(t, pool)
+		seen, err := repo.ListConversations(ctx, domain.ConversationQuery{IDYapeAccount: "acc-catch", Direction: domain.DirectionNewest, Size: 1})
+		require.NoError(t, err)
+		topCursor := domain.NewConversationCursor(seen.Conversations[0].LastOccurredAt, seen.Conversations[0].ConversationID)
+
+		// A new conversation appears, then the one the client holds is active again, above it.
+		_, err = pool.Exec(ctx, `
+			INSERT INTO conversation_messages (conversation_id, sequence, role, author_id, text, event_name, id_yape_account, occurred_at)
+			VALUES ('catch-d1', 1, 'appUser', 'a', 'x', 'UserMessageSent', 'acc-catch', '2026-10-27T11:00:00Z'),
+			       ('catch-c1', 2, 'appUser', 'a', 'again', 'UserMessageSent', 'acc-catch', '2026-10-27T12:00:00Z')`)
+		require.NoError(t, err)
+		refreshSummaries(t, pool)
+
+		news, err := repo.ListConversations(ctx, domain.ConversationQuery{IDYapeAccount: "acc-catch", Direction: domain.DirectionAfter, Cursor: topCursor, Size: 10})
+		require.NoError(t, err)
+		assert.Equal(t, []string{"catch-c1", "catch-d1"}, idsOf(news), "the new conversation is found, and so is the one that moved")
 	})
 
 	t.Run("walkingBackThroughConversationsVisitsEachOnce", func(t *testing.T) {
@@ -322,7 +392,8 @@ func TestRead(t *testing.T) {
 			SELECT 'tie-' || c, s, 'appUser', 'a', 'x', 'UserMessageSent', 'acc-tie', '2026-10-22T10:00:00Z'::timestamptz
 			FROM unnest(ARRAY['a','b','c','d','e']) c, generate_series(1, 2) s`)
 		require.NoError(t, err)
-		want := []string{"tie-a", "tie-b", "tie-c", "tie-d", "tie-e"} // most recent first, then by id
+		refreshSummaries(t, pool)
+		want := []string{"tie-e", "tie-d", "tie-c", "tie-b", "tie-a"} // most recent first, then by id, the larger first
 
 		for _, size := range []int{1, 2, 3} {
 			var back []string
@@ -338,8 +409,8 @@ func TestRead(t *testing.T) {
 			}
 			assert.Equal(t, want, back, "size %d walking back", size)
 
-			forward := []string{"tie-e"}
-			list, err = conversations("acc-tie", domain.DirectionAfter, "tie-e", size)
+			forward := []string{"tie-a"} // the last of the list is where a forward walk starts
+			list, err = conversations("acc-tie", domain.DirectionAfter, "tie-a", size)
 			for pages := 0; ; pages++ {
 				require.NoError(t, err)
 				require.Less(t, pages, 10, "the walk ends")

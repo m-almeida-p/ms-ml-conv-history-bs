@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
@@ -145,4 +146,40 @@ func TestPanicIsAnsweredAndLogged(t *testing.T) {
 	assert.NotContains(t, rec.Body.String(), "something broke")
 	assert.Contains(t, log.text(), "error GET /boom failed: something broke")
 	assert.Contains(t, log.text(), "info GET /boom 500")
+}
+
+func TestARequestThatRunsPastItsDeadlineIsCancelledAndAnswered503(t *testing.T) {
+	history := mocks.NewHistory(t)
+	history.On("Messages", mock.Anything, mock.Anything).Return(
+		func(ctx context.Context, _ service.MessagesRequest) (domain.MessagePage, error) {
+			<-ctx.Done() // a slow query: it ends only when the server cancels it
+
+			return domain.MessagePage{}, ctx.Err()
+		}).Once()
+	log := &recordingLog{}
+	e := newServer(history, log, nil, 30*time.Millisecond)
+
+	started := time.Now()
+	rec := get(e, "/v1/conversations/conv_v1_a/messages")
+
+	assert.Less(t, time.Since(started), 2*time.Second, "the request did not wait for the query to finish on its own")
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	assert.Equal(t, "application/problem+json", rec.Header().Get("Content-Type"))
+	assert.JSONEq(t, `{"type":"about:blank","title":"Service Unavailable","status":503,"detail":"The request took too long. Try again."}`, rec.Body.String())
+	assert.Contains(t, log.text(), "deadline exceeded")
+}
+
+func TestARequestInsideItsDeadlineIsUntouched(t *testing.T) {
+	history := mocks.NewHistory(t)
+	history.On("Conversations", mock.Anything, service.ConversationsRequest{IDYapeAccount: "acc-1"}).Return(domain.ConversationList{Conversations: []domain.ConversationSummary{}}, nil).Once()
+	e := newServer(history, &recordingLog{}, nil, time.Second)
+
+	rec := get(e, "/v1/conversations?idYapeAccount=acc-1")
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestTheRequestDeadlineIsLongEnoughForARealQueryAndShortEnoughToBound(t *testing.T) {
+	assert.GreaterOrEqual(t, requestTimeout, 5*time.Second, "the heaviest account measured takes milliseconds, so this is generous")
+	assert.LessOrEqual(t, requestTimeout, time.Minute, "a request must not hold a connection for long")
 }

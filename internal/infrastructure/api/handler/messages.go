@@ -29,25 +29,16 @@ import (
 // @Failure 500 {object} problemResponse "Problem details (RFC 9457), type about:blank"
 // @Router /v1/conversations/{conversationId}/messages [get]
 func (h *Handler) Messages(c echo.Context) error {
-	before, err := queryOnce(c, "page[before]")
-	if err != nil {
-		return h.fail(c, err)
-	}
-	after, err := queryOnce(c, "page[after]")
-	if err != nil {
-		return h.fail(c, err)
-	}
-
-	size, err := queryOnce(c, "page[size]")
+	params, err := queryParams(c, "page[before]", "page[after]", "page[size]")
 	if err != nil {
 		return h.fail(c, err)
 	}
 
 	page, err := h.history.Messages(c.Request().Context(), service.MessagesRequest{
 		ConversationID: c.Param("conversationId"),
-		Before:         before,
-		After:          after,
-		Size:           size,
+		Before:         params[0],
+		After:          params[1],
+		Size:           params[2],
 	})
 	if err != nil {
 		return h.fail(c, err)
@@ -65,7 +56,9 @@ func (h *Handler) Messages(c echo.Context) error {
 // It is empty on the last page. The page size is repeated when it is not the default,
 // so following the link keeps the size the client chose.
 func continuation(page domain.MessagePage) string {
-	if !page.HasMore {
+	// The conversation id comes from the request and goes into a header unescaped. The service has
+	// validated it, and this keeps the link safe even if that ever changes.
+	if !page.HasMore || !domain.ValidIdentifier(page.ConversationID) {
 		return ""
 	}
 
@@ -113,4 +106,19 @@ func queryOnce(c echo.Context, key string) (*string, error) {
 	}
 
 	return &values[0], nil
+}
+
+// queryParams reads several query parameters with queryOnce, in the order given. It stops at the
+// first one that is refused.
+func queryParams(c echo.Context, keys ...string) ([]*string, error) {
+	values := make([]*string, 0, len(keys))
+	for _, key := range keys {
+		value, err := queryOnce(c, key)
+		if err != nil {
+			return nil, err
+		}
+		values = append(values, value)
+	}
+
+	return values, nil
 }

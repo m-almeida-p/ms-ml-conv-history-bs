@@ -18,8 +18,14 @@ import (
 var (
 	//go:embed SQL/insert_inbox.sql
 	sqlInsertInbox string
+	//go:embed SQL/insert_message.sql
+	sqlInsertMessage string
 	//go:embed SQL/upsert_message.sql
 	sqlUpsertMessage string
+	//go:embed SQL/count_message.sql
+	sqlCountMessage string
+	//go:embed SQL/delete_conversation_summaries.sql
+	sqlDeleteConversationSummaries string
 	//go:embed SQL/delete_messages.sql
 	sqlDeleteMessages string
 	//go:embed SQL/select_inbox_batch.sql
@@ -151,12 +157,35 @@ func writeError(what string, err error) error {
 	return dbError(what, err)
 }
 
-// upsertMessage writes one chat message inside tx.
+// upsertMessage writes one chat message inside tx, and adds it to its conversation's summary
+// when it is new. The summary changes only for a message that was not there: a message already
+// stored is refreshed as before and was counted when it first arrived, so neither a redelivery
+// nor a replay counts it twice. The insert and the count share the transaction, so the summary
+// never differs from the messages it summarises. The count adds one and widens the first and
+// last times, which commute, so events in any order, or two writers at once, give the same row.
+// A message with no account is in no account's list and is not counted.
 func upsertMessage(ctx context.Context, tx pgx.Tx, message domain.Message) error {
-	_, err := tx.Exec(ctx, sqlUpsertMessage,
+	account := nullable(message.IDYapeAccount)
+	fields := []any{
 		message.ConversationID, message.Sequence, string(message.Role), message.AuthorID,
 		message.Type, message.Text, message.Truncated, message.EventName,
-		nullable(message.IDYapeAccount), nullable(message.Flow), message.OccurredAt)
+		account, nullable(message.Flow), message.OccurredAt,
+	}
+
+	tag, err := tx.Exec(ctx, sqlInsertMessage, fields...)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		_, err = tx.Exec(ctx, sqlUpsertMessage, fields...)
+
+		return err
+	}
+	if account == nil {
+		return nil
+	}
+
+	_, err = tx.Exec(ctx, sqlCountMessage, *account, message.ConversationID, message.OccurredAt)
 
 	return err
 }

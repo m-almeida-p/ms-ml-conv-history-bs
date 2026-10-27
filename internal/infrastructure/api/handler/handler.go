@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"net/http"
 
@@ -48,6 +49,11 @@ func (h *Handler) failWithCursor(c echo.Context, err error, cursorDetail string)
 		return writeProblem(c, http.StatusBadRequest, typeInvalidRequest, "Invalid request", invalidRequestDetail(err))
 	case errors.Is(err, domain.ErrNotFound):
 		return writeProblem(c, http.StatusNotFound, typeConversationNotFound, "Conversation not found", detailNoMessages)
+	case errors.Is(err, context.DeadlineExceeded):
+		// The request ran past its deadline: the server is busy, and trying again may work.
+		h.log.Errorf("%s %s failed: %v", c.Request().Method, c.Path(), err)
+
+		return writeBlankProblem(c, http.StatusServiceUnavailable, detailTimeout)
 	default:
 		h.log.Errorf("%s %s failed: %v", c.Request().Method, c.Path(), err)
 
@@ -77,20 +83,27 @@ func ErrorHandler(log Logger) echo.HTTPErrorHandler {
 		}
 
 		var httpErr *echo.HTTPError
+		logged := false
 		if !errors.As(err, &httpErr) {
 			log.Errorf("%s %s failed: %v", c.Request().Method, c.Path(), err)
-			httpErr = echo.NewHTTPError(http.StatusInternalServerError)
+			httpErr, logged = echo.NewHTTPError(http.StatusInternalServerError), true
 		}
 
-		switch httpErr.Code {
-		case http.StatusNotFound:
+		switch {
+		case httpErr.Code == http.StatusNotFound:
 			_ = writeBlankProblem(c, httpErr.Code, detailNothingHere)
-		case http.StatusMethodNotAllowed:
+		case httpErr.Code == http.StatusMethodNotAllowed:
 			_ = writeBlankProblem(c, httpErr.Code, detailMethodNotAllowed)
-		case http.StatusBadRequest:
-			_ = writeProblem(c, httpErr.Code, typeInvalidRequest, "Invalid request", detailMalformed)
-		default:
+		case httpErr.Code == http.StatusBadRequest:
+			_ = writeProblem(c, httpErr.Code, typeInvalidRequest, "Invalid request", detailInvalidRequest)
+		case httpErr.Code >= http.StatusInternalServerError:
+			if !logged {
+				log.Errorf("%s %s failed: %v", c.Request().Method, c.Path(), httpErr)
+			}
 			_ = writeBlankProblem(c, httpErr.Code, detailServerError)
+		default:
+			// Any other client error: the status says what it is, and nothing is wrong on our side.
+			_ = writeBlankProblem(c, httpErr.Code, detailClientError)
 		}
 	}
 }

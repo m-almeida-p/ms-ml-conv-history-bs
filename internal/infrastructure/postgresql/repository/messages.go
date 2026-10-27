@@ -4,8 +4,8 @@ import (
 	"context"
 	_ "embed"
 	"errors"
+	"fmt"
 	"slices"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -31,8 +31,6 @@ var (
 	sqlListConversationsBefore string
 	//go:embed SQL/list_conversations_after.sql
 	sqlListConversationsAfter string
-	//go:embed SQL/conversation_cursor.sql
-	sqlConversationCursor string
 )
 
 var _ repository.MessageRepository = (*PostgresMessageRepository)(nil)
@@ -51,7 +49,7 @@ func NewPostgresMessageRepository(db postgresql.DB) *PostgresMessageRepository {
 // than a page, which tells whether more exist without a second query.
 func (r *PostgresMessageRepository) ListMessages(ctx context.Context, q domain.PageQuery) (domain.Page, error) {
 	if q.Size < 1 || q.Size > domain.PageSize {
-		return domain.Page{}, domain.InvalidRequest("the page size must be from 1 to %d", domain.PageSize)
+		return domain.Page{}, fmt.Errorf("list messages: the page size must be from 1 to %d", domain.PageSize)
 	}
 
 	query, args, err := r.pageQuery(ctx, q)
@@ -108,7 +106,7 @@ func (r *PostgresMessageRepository) pageQuery(ctx context.Context, q domain.Page
 		return query, []any{q.ConversationID, q.CursorSequence, limit}, nil
 	}
 
-	return "", nil, domain.InvalidRequest("unknown direction %q", q.Direction)
+	return "", nil, fmt.Errorf("list messages: unknown direction %q", q.Direction)
 }
 
 // checkCursor confirms that the cursor is a message of the conversation. One that
@@ -160,16 +158,18 @@ func scanMessages(rows pgx.Rows) ([]domain.Message, error) {
 	return messages, nil
 }
 
-// ListConversations implements repository.MessageRepository. Like ListMessages, it reads
-// one row more than a page, which tells whether more exist without a second query. A page
-// beside a cursor is cut by the time of the cursor conversation's last message, with the
-// conversation id as the tie-break, so the pages never overlap.
+// ListConversations implements repository.MessageRepository. It reads conversation_summaries, one
+// row per conversation, so a page costs the rows it returns and not the account's history. Like
+// ListMessages, it reads one row more than a page, which tells whether more exist without a second
+// query. A page beside a cursor starts from the position the cursor carries (the time of a
+// conversation's last message, then its id as the tie-break), so the pages never overlap, and no
+// lookup is needed: the cursor stays right even when the conversation it came from has moved since.
 func (r *PostgresMessageRepository) ListConversations(ctx context.Context, q domain.ConversationQuery) (domain.ConversationList, error) {
 	if q.Size < 1 || q.Size > domain.ConversationListSize {
-		return domain.ConversationList{}, domain.InvalidRequest("the page size must be from 1 to %d", domain.ConversationListSize)
+		return domain.ConversationList{}, fmt.Errorf("list conversations: the page size must be from 1 to %d", domain.ConversationListSize)
 	}
 
-	query, args, err := r.conversationsQuery(ctx, q)
+	query, args, err := conversationsQuery(q)
 	if err != nil {
 		return domain.ConversationList{}, err
 	}
@@ -205,29 +205,17 @@ func (r *PostgresMessageRepository) ListConversations(ctx context.Context, q dom
 }
 
 // conversationsQuery chooses the statement and arguments that read the page q asks for.
-// For a page beside a cursor it first finds the cursor conversation among the account's.
-func (r *PostgresMessageRepository) conversationsQuery(ctx context.Context, q domain.ConversationQuery) (string, []any, error) {
+func conversationsQuery(q domain.ConversationQuery) (string, []any, error) {
 	limit := q.Size + 1
 
 	switch q.Direction {
 	case domain.DirectionNewest:
 		return sqlListConversations, []any{q.IDYapeAccount, limit}, nil
-	case domain.DirectionBefore, domain.DirectionAfter:
-		var lastOccurredAt time.Time
-		err := r.db.QueryRow(ctx, sqlConversationCursor, q.IDYapeAccount, q.CursorID).Scan(&lastOccurredAt)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return "", nil, domain.ErrInvalidCursor
-		}
-		if err != nil {
-			return "", nil, dbError("find conversation cursor", err)
-		}
-		query := sqlListConversationsAfter
-		if q.Direction == domain.DirectionBefore {
-			query = sqlListConversationsBefore
-		}
-
-		return query, []any{q.IDYapeAccount, lastOccurredAt, q.CursorID, limit}, nil
+	case domain.DirectionBefore:
+		return sqlListConversationsBefore, []any{q.IDYapeAccount, q.Cursor.LastOccurredAt, q.Cursor.ConversationID, limit}, nil
+	case domain.DirectionAfter:
+		return sqlListConversationsAfter, []any{q.IDYapeAccount, q.Cursor.LastOccurredAt, q.Cursor.ConversationID, limit}, nil
 	}
 
-	return "", nil, domain.InvalidRequest("unknown direction %q", q.Direction)
+	return "", nil, fmt.Errorf("list conversations: unknown direction %q", q.Direction)
 }

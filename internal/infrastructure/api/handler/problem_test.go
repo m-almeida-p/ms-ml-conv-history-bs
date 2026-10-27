@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -53,6 +54,7 @@ func problemCases(t *testing.T) map[string]*httptest.ResponseRecorder {
 		"invalidCursorList":     reply(domain.ErrInvalidCursor, list),
 		"conversationNotFound":  reply(domain.ErrNotFound, messages),
 		"serverError":           reply(errors.New("connection reset: password=hunter2"), messages),
+		"deadlineExceeded":      reply(fmt.Errorf("list messages: %w", context.DeadlineExceeded), messages),
 		"repeatedParameter":     reply(nil, messages+"?page[size]=1&page[size]=2"),
 		"unknownRoute":          reply(nil, "/v1/nothing"),
 		"wrongMethod":           wrongMethod(),
@@ -131,6 +133,7 @@ func TestEachKindOfErrorHasItsOwnTypeAndAStableTitle(t *testing.T) {
 		"serverError":           {typeBlank, "Internal Server Error"},
 		"repeatedParameter":     {typeInvalidRequest, "Invalid request"},
 		"unknownRoute":          {typeBlank, "Not Found"},
+		"deadlineExceeded":      {typeBlank, "Service Unavailable"},
 		"wrongMethod":           {typeBlank, "Method Not Allowed"},
 	} {
 		body := decodeProblem(t, cases[name])
@@ -221,4 +224,17 @@ func TestTheDetailOfAnInvalidRequestComesFromTheTypedErrorWhateverIsWrappedAroun
 			assert.NotContains(t, rec.Body.String(), "internal words", "an error without a typed detail is not shown")
 		})
 	}
+}
+
+func TestADeadlineIsServiceUnavailableAndIsLogged(t *testing.T) {
+	history := mocks.NewHistory(t)
+	history.On("Messages", mock.Anything, mock.Anything).Return(domain.MessagePage{}, fmt.Errorf("list messages: %w", context.DeadlineExceeded)).Once()
+	log := &recordingLog{}
+
+	rec := serve(t, history, log, "/v1/conversations/conv_v1_a/messages")
+
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	assert.JSONEq(t, problemJSON(503, "", "Service Unavailable", "The request took too long. Try again."), rec.Body.String())
+	assert.Contains(t, log.text(), "deadline exceeded", "the cause is in the log, not in the reply")
+	assert.NotContains(t, rec.Body.String(), "deadline exceeded")
 }

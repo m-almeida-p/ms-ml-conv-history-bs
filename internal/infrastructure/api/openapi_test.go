@@ -241,7 +241,7 @@ func TestRepliesConformToTheOpenAPISpec(t *testing.T) {
 			target: "/v1/conversations?idYapeAccount=acc-1",
 			expect: func(h *mocks.History) {
 				h.On("Conversations", mock.Anything, service.ConversationsRequest{IDYapeAccount: "acc-1"}).Return(domain.ConversationList{
-					Direction: domain.DirectionNewest, Size: domain.ConversationListSize, HasMore: true, AfterCursor: "conv_v1_a", BeforeCursor: "conv_v1_a",
+					Direction: domain.DirectionNewest, Size: domain.ConversationListSize, HasMore: true, AfterCursor: "1792505243500000~conv_v1_a", BeforeCursor: "1792505243500000~conv_v1_a",
 					Conversations: []domain.ConversationSummary{{ConversationID: "conv_v1_a", MessageCount: 5, FirstOccurredAt: at, LastOccurredAt: at}},
 				}, nil).Once()
 			},
@@ -252,7 +252,7 @@ func TestRepliesConformToTheOpenAPISpec(t *testing.T) {
 			target: "/v1/conversations?idYapeAccount=acc-1&page[after]=conv_v1_a&page[size]=1",
 			expect: func(h *mocks.History) {
 				h.On("Conversations", mock.Anything, mock.Anything).Return(domain.ConversationList{
-					Direction: domain.DirectionAfter, Size: 1, HasMore: true, AfterCursor: "conv_v1_b", BeforeCursor: "conv_v1_b",
+					Direction: domain.DirectionAfter, Size: 1, HasMore: true, AfterCursor: "1792505243500000~conv_v1_b", BeforeCursor: "1792505243500000~conv_v1_b",
 					Conversations: []domain.ConversationSummary{{ConversationID: "conv_v1_b", MessageCount: 2, FirstOccurredAt: at, LastOccurredAt: at}},
 				}, nil).Once()
 			},

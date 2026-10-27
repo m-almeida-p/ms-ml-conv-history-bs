@@ -60,7 +60,9 @@ func pick(events []domain.InboxEvent, order ...int) []domain.InboxEvent {
 	return out
 }
 
-// digest fingerprints both tables without the columns that hold the clock.
+// digest fingerprints the tables without the columns that hold the clock. The second value covers
+// the messages and the conversation summaries together, so every comparison in these tests also
+// compares the summaries; and it fails the test when a summary differs from the messages it summarises.
 func digest(t *testing.T, pool *pgxpool.Pool) (inbox, messages string) {
 	t.Helper()
 
@@ -72,8 +74,12 @@ func digest(t *testing.T, pool *pgxpool.Pool) (inbox, messages string) {
 		FROM conversation_inbox`).Scan(&inbox))
 	require.NoError(t, pool.QueryRow(ctx, `
 		SELECT COALESCE(md5(string_agg(m::text, E'\n' ORDER BY conversation_id, sequence)), '') FROM conversation_messages m`).Scan(&messages))
+	var summaries string
+	require.NoError(t, pool.QueryRow(ctx, `
+		SELECT COALESCE(md5(string_agg(s::text, E'\n' ORDER BY id_yape_account, conversation_id)), '') FROM conversation_summaries s`).Scan(&summaries))
+	assertNoSummaryDrift(t, pool)
 
-	return inbox, messages
+	return inbox, messages + summaries
 }
 
 func count(t *testing.T, pool *pgxpool.Pool, table string) int {
@@ -95,7 +101,7 @@ func TestApply(t *testing.T) {
 
 	reset := func(t *testing.T) {
 		t.Helper()
-		_, err := pool.Exec(ctx, "TRUNCATE conversation_messages, conversation_inbox")
+		_, err := pool.Exec(ctx, "TRUNCATE conversation_summaries, conversation_messages, conversation_inbox")
 		require.NoError(t, err)
 	}
 

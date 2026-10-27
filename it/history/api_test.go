@@ -12,6 +12,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/yaperos/ms-ml-conv-history-bs/internal/core/domain"
 )
 
 // freePort asks the system for a port nobody holds.
@@ -76,6 +78,7 @@ func TestAPI(t *testing.T) {
 		             ('4', '2026-10-21T13:00:00Z'), ('5', '2026-10-21T14:00:00Z'),
 		             ('tie_a', '2026-10-21T15:00:00Z'), ('tie_b', '2026-10-21T15:00:00Z')) v(c, t)`)
 	require.NoError(t, err)
+	refreshSummaries(t, pool)
 
 	port := freePort(t)
 	proc := startBinary(t, buildBinary(t, "api"), []string{"POSTGRES_DSN=" + dsn, fmt.Sprintf("SERVER_PORT=%d", port)})
@@ -288,8 +291,24 @@ func TestAPI(t *testing.T) {
 	type conversationsPage struct {
 		Conversations []struct {
 			ID           string `json:"_id"`
+			Cursor       string `json:"cursor"`
 			MessageCount int    `json:"messageCount"`
 		} `json:"conversations"`
+	}
+	// cursorAt is the cursor the API writes for a conversation whose last message is at the given time.
+	cursorAt := func(rfc3339, id string) string {
+		at, err := time.Parse(time.RFC3339, rfc3339)
+		require.NoError(t, err)
+
+		return domain.NewConversationCursor(at, id).String()
+	}
+	idsOfPage := func(page conversationsPage) []string {
+		ids := []string{}
+		for _, c := range page.Conversations {
+			ids = append(ids, c.ID)
+		}
+
+		return ids
 	}
 	// walkConversations follows one relation of the Link header from path until it stops,
 	// and returns the ids in the order the pages came and the number of pages.
@@ -327,8 +346,8 @@ func TestAPI(t *testing.T) {
 		var page conversationsPage
 		require.NoError(t, json.Unmarshal(body, &page))
 		require.Len(t, page.Conversations, 7)
-		assert.Equal(t, "list_tie_a", page.Conversations[0].ID, "the tie is broken by id")
-		assert.Equal(t, "list_tie_b", page.Conversations[1].ID)
+		assert.Equal(t, "list_tie_b", page.Conversations[0].ID, "the tie is broken by id, the larger first")
+		assert.Equal(t, "list_tie_a", page.Conversations[1].ID)
 		assert.Equal(t, "list_5", page.Conversations[2].ID)
 		assert.Empty(t, header.Values("Link"))
 	})
@@ -336,17 +355,17 @@ func TestAPI(t *testing.T) {
 	t.Run("followingPrevLinksWalksBackThroughEveryConversation", func(t *testing.T) {
 		pages, links := walkConversations(t, "/v1/conversations?idYapeAccount=acc-list&page[size]=2", "prev")
 
-		assert.Equal(t, [][]string{{"list_tie_a", "list_tie_b"}, {"list_5", "list_4"}, {"list_3", "list_2"}, {"list_1"}}, pages)
-		assert.Equal(t, `</v1/conversations?idYapeAccount=acc-list&page[before]=list_tie_b&page[size]=2>; rel="prev"`, links[0])
+		assert.Equal(t, [][]string{{"list_tie_b", "list_tie_a"}, {"list_5", "list_4"}, {"list_3", "list_2"}, {"list_1"}}, pages)
+		assert.Equal(t, `</v1/conversations?idYapeAccount=acc-list&page[before]=`+cursorAt("2026-10-21T15:00:00Z", "list_tie_a")+`&page[size]=2>; rel="prev"`, links[0])
 		assert.Empty(t, links[len(links)-1], "the last page has no Link header")
 	})
 
 	t.Run("followingNextLinksWalksForwardFromTheOldest", func(t *testing.T) {
-		pages, links := walkConversations(t, "/v1/conversations?idYapeAccount=acc-list&page[after]=list_1&page[size]=3", "next")
+		pages, links := walkConversations(t, "/v1/conversations?idYapeAccount=acc-list&page[after]="+cursorAt("2026-10-21T10:00:00Z", "list_1")+"&page[size]=3", "next")
 
 		// Each page is most recent first, and the walk goes towards the most recent ones.
-		assert.Equal(t, [][]string{{"list_4", "list_3", "list_2"}, {"list_tie_a", "list_tie_b", "list_5"}}, pages)
-		assert.Equal(t, `</v1/conversations?idYapeAccount=acc-list&page[after]=list_4&page[size]=3>; rel="next"`, links[0])
+		assert.Equal(t, [][]string{{"list_4", "list_3", "list_2"}, {"list_tie_b", "list_tie_a", "list_5"}}, pages)
+		assert.Equal(t, `</v1/conversations?idYapeAccount=acc-list&page[after]=`+cursorAt("2026-10-21T13:00:00Z", "list_4")+`&page[size]=3>; rel="next"`, links[0])
 		assert.Empty(t, links[len(links)-1], "the last page has no Link header")
 	})
 
@@ -358,8 +377,59 @@ func TestAPI(t *testing.T) {
 		assert.Len(t, pages, 7)
 	})
 
+	t.Run("everyConversationCarriesACursorThatReadsTheListFromThere", func(t *testing.T) {
+		_, body, _ := getWithHeader("/v1/conversations?idYapeAccount=acc-list")
+		var all conversationsPage
+		require.NoError(t, json.Unmarshal(body, &all))
+		require.Len(t, all.Conversations, 7)
+		for _, c := range all.Conversations {
+			assert.Regexp(t, `^\d+~list_`, c.Cursor, "the cursor holds the position and the id")
+		}
+
+		// Older than list_5 (the third): list_4 .. list_1. More recent than list_5: the tie pair.
+		_, older, _ := getWithHeader("/v1/conversations?idYapeAccount=acc-list&page[before]=" + all.Conversations[2].Cursor)
+		var o conversationsPage
+		require.NoError(t, json.Unmarshal(older, &o))
+		assert.Equal(t, []string{"list_4", "list_3", "list_2", "list_1"}, idsOfPage(o))
+
+		_, newer, _ := getWithHeader("/v1/conversations?idYapeAccount=acc-list&page[after]=" + all.Conversations[2].Cursor)
+		var n conversationsPage
+		require.NoError(t, json.Unmarshal(newer, &n))
+		assert.Equal(t, []string{"list_tie_b", "list_tie_a"}, idsOfPage(n))
+	})
+
+	t.Run("aLinkStillPointsWhereThePageEndedWhenItsConversationMoves", func(t *testing.T) {
+		_, err := pool.Exec(ctx, `
+			INSERT INTO conversation_messages (conversation_id, sequence, role, author_id, text, event_name, id_yape_account, occurred_at)
+			VALUES ('mv_1', 1, 'appUser', 'a', 'x', 'UserMessageSent', 'acc-mv', '2026-10-27T10:00:00Z'),
+			       ('mv_2', 1, 'appUser', 'a', 'x', 'UserMessageSent', 'acc-mv', '2026-10-27T11:00:00Z'),
+			       ('mv_3', 1, 'appUser', 'a', 'x', 'UserMessageSent', 'acc-mv', '2026-10-27T12:00:00Z'),
+			       ('mv_4', 1, 'appUser', 'a', 'x', 'UserMessageSent', 'acc-mv', '2026-10-27T13:00:00Z')`)
+		require.NoError(t, err)
+		refreshSummaries(t, pool)
+
+		status, body, header := getWithHeader("/v1/conversations?idYapeAccount=acc-mv&page[size]=2")
+		require.Equal(t, http.StatusOK, status)
+		var first conversationsPage
+		require.NoError(t, json.Unmarshal(body, &first))
+		assert.Equal(t, []string{"mv_4", "mv_3"}, idsOfPage(first))
+		next := linkRel(header.Get("Link"), "prev")
+		require.NotEmpty(t, next)
+
+		// mv_3, the conversation the link was made from, receives a message and jumps to the top.
+		_, err = pool.Exec(ctx, `INSERT INTO conversation_messages (conversation_id, sequence, role, author_id, text, event_name, id_yape_account, occurred_at)
+			VALUES ('mv_3', 2, 'appUser', 'a', 'again', 'UserMessageSent', 'acc-mv', '2026-10-27T14:00:00Z')`)
+		require.NoError(t, err)
+		refreshSummaries(t, pool)
+
+		_, body, _ = getWithHeader(next)
+		var second conversationsPage
+		require.NoError(t, json.Unmarshal(body, &second))
+		assert.Equal(t, []string{"mv_2", "mv_1"}, idsOfPage(second), "no repeat of mv_4 and nothing skipped")
+	})
+
 	t.Run("aPageBeyondTheOldestIsEmptyWithoutALink", func(t *testing.T) {
-		status, body, header := getWithHeader("/v1/conversations?idYapeAccount=acc-list&page[before]=list_1")
+		status, body, header := getWithHeader("/v1/conversations?idYapeAccount=acc-list&page[before]=" + cursorAt("2026-10-21T10:00:00Z", "list_1"))
 
 		require.Equal(t, http.StatusOK, status)
 		assert.JSONEq(t, `{"conversations":[]}`, string(body))
@@ -390,7 +460,9 @@ func TestAPI(t *testing.T) {
 			{name: "emptyCursor", path: "/v1/conversations/conv_big/messages?page[before]=", wantStatus: 400, wantType: "invalid-cursor"},
 			{name: "emptyCursorBesideARealOne", path: "/v1/conversations/conv_big/messages?page[before]=&page[after]=100", wantStatus: 400, wantType: "invalid-request"},
 			{name: "listBothCursors", path: "/v1/conversations?idYapeAccount=acc-list&page[before]=list_1&page[after]=list_2", wantStatus: 400, wantType: "invalid-request"},
-			{name: "listCursorOfAnotherAccount", path: "/v1/conversations?idYapeAccount=acc-list&page[before]=conv_big", wantStatus: 400, wantType: "invalid-cursor"},
+			{name: "listConversationIDIsNotACursor", path: "/v1/conversations?idYapeAccount=acc-list&page[before]=conv_big", wantStatus: 400, wantType: "invalid-cursor"},
+			{name: "listMessageCursorIsNotAConversationCursor", path: "/v1/conversations?idYapeAccount=acc-list&page[after]=100", wantStatus: 400, wantType: "invalid-cursor"},
+			{name: "listCursorWithoutAnInstant", path: "/v1/conversations?idYapeAccount=acc-list&page[after]=~list_1", wantStatus: 400, wantType: "invalid-cursor"},
 			{name: "listCursorThatDoesNotExist", path: "/v1/conversations?idYapeAccount=acc-list&page[after]=nope", wantStatus: 400, wantType: "invalid-cursor"},
 			{name: "listEmptyCursor", path: "/v1/conversations?idYapeAccount=acc-list&page[before]=", wantStatus: 400, wantType: "invalid-cursor"},
 			{name: "listMalformedCursor", path: "/v1/conversations?idYapeAccount=acc-list&page[before]=a%20b", wantStatus: 400, wantType: "invalid-cursor"},
@@ -461,6 +533,7 @@ func TestAPI(t *testing.T) {
 			_, err := pool.Exec(ctx, `INSERT INTO conversation_messages (conversation_id, sequence, role, author_id, text, event_name, id_yape_account, occurred_at)
 				VALUES ('conv_text', $1, 'appUser', 'a', $2, 'UserMessageSent', 'acc-text', now())`, i+1, text)
 			require.NoError(t, err)
+			refreshSummaries(t, pool)
 		}
 
 		status, body := get("/v1/conversations/conv_text/messages")

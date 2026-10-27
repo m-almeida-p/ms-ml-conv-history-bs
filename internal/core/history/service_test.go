@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -216,18 +217,29 @@ func TestMessagesErrorsNeverEchoTheInput(t *testing.T) {
 	}
 }
 
-func conversationsOf(ids ...string) []domain.ConversationSummary {
+// instant returns the n-th second of a fixed day, which is also its cursor instant in microseconds / 1e6.
+func instant(n int) time.Time { return time.Date(2026, 10, 27, 10, 0, n, 0, time.UTC) }
+
+// conversationsAt returns conversations, most recent first, each last active at the given second.
+func conversationsAt(seconds map[string]int, ids ...string) []domain.ConversationSummary {
 	out := make([]domain.ConversationSummary, 0, len(ids))
 	for _, id := range ids {
-		out = append(out, domain.ConversationSummary{ConversationID: id, MessageCount: 2})
+		out = append(out, domain.ConversationSummary{ConversationID: id, MessageCount: 2, LastOccurredAt: instant(seconds[id])})
 	}
 
 	return out
 }
 
+// cursorOf is the cursor string of a conversation last active at the given second.
+func cursorOf(second int, id string) string {
+	return domain.NewConversationCursor(instant(second), id).String()
+}
+
 func TestConversations(t *testing.T) {
 	storeDown := errors.New("connection reset")
-	longID := strings.Repeat("c", 128)
+	at := map[string]int{"c3": 30, "c2": 20, "c1": 10, "b2": 8, "b1": 5, "d1": 40}
+	cursorC1 := domain.ConversationCursor{LastOccurredAt: instant(10), ConversationID: "c1"}
+	cursorC3 := domain.ConversationCursor{LastOccurredAt: instant(30), ConversationID: "c3"}
 
 	tests := []struct {
 		name        string
@@ -243,45 +255,45 @@ func TestConversations(t *testing.T) {
 			name:      "noCursorAsksForTheMostRecentPage",
 			req:       service.ConversationsRequest{IDYapeAccount: "acc-1"},
 			wantQuery: &domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionNewest, Size: domain.ConversationListSize},
-			page:      domain.ConversationList{Conversations: conversationsOf("c3", "c2", "c1"), HasMore: true},
+			page:      domain.ConversationList{Conversations: conversationsAt(at, "c3", "c2", "c1"), HasMore: true},
 			want: domain.ConversationList{
-				Direction: domain.DirectionNewest, Size: domain.ConversationListSize, Conversations: conversationsOf("c3", "c2", "c1"),
-				HasMore: true, BeforeCursor: "c1", AfterCursor: "c3",
+				Direction: domain.DirectionNewest, Size: domain.ConversationListSize, Conversations: conversationsAt(at, "c3", "c2", "c1"),
+				HasMore: true, BeforeCursor: cursorOf(10, "c1"), AfterCursor: cursorOf(30, "c3"),
 			},
 		},
 		{
-			name:      "beforeAsksForOlderConversations",
-			req:       service.ConversationsRequest{IDYapeAccount: "acc-1", Before: ptr("c1")},
-			wantQuery: &domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionBefore, CursorID: "c1", Size: domain.ConversationListSize},
-			page:      domain.ConversationList{Conversations: conversationsOf("b2", "b1")},
+			name:      "beforeAsksForOlderConversationsFromThePositionInTheCursor",
+			req:       service.ConversationsRequest{IDYapeAccount: "acc-1", Before: ptr(cursorOf(10, "c1"))},
+			wantQuery: &domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionBefore, Cursor: cursorC1, Size: domain.ConversationListSize},
+			page:      domain.ConversationList{Conversations: conversationsAt(at, "b2", "b1")},
 			want: domain.ConversationList{
-				Direction: domain.DirectionBefore, Size: domain.ConversationListSize, Conversations: conversationsOf("b2", "b1"),
-				BeforeCursor: "b1", AfterCursor: "b2",
+				Direction: domain.DirectionBefore, Size: domain.ConversationListSize, Conversations: conversationsAt(at, "b2", "b1"),
+				BeforeCursor: cursorOf(5, "b1"), AfterCursor: cursorOf(8, "b2"),
 			},
 		},
 		{
 			name:      "afterAsksForMoreRecentConversations",
-			req:       service.ConversationsRequest{IDYapeAccount: "acc-1", After: ptr("c3")},
-			wantQuery: &domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionAfter, CursorID: "c3", Size: domain.ConversationListSize},
-			page:      domain.ConversationList{Conversations: conversationsOf("d1"), HasMore: true},
+			req:       service.ConversationsRequest{IDYapeAccount: "acc-1", After: ptr(cursorOf(30, "c3"))},
+			wantQuery: &domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionAfter, Cursor: cursorC3, Size: domain.ConversationListSize},
+			page:      domain.ConversationList{Conversations: conversationsAt(at, "d1"), HasMore: true},
 			want: domain.ConversationList{
-				Direction: domain.DirectionAfter, Size: domain.ConversationListSize, Conversations: conversationsOf("d1"),
-				HasMore: true, BeforeCursor: "d1", AfterCursor: "d1",
+				Direction: domain.DirectionAfter, Size: domain.ConversationListSize, Conversations: conversationsAt(at, "d1"),
+				HasMore: true, BeforeCursor: cursorOf(40, "d1"), AfterCursor: cursorOf(40, "d1"),
 			},
 		},
 		{
 			name:      "pageSizeAsksForFewer",
 			req:       service.ConversationsRequest{IDYapeAccount: "acc-1", Size: ptr("20")},
 			wantQuery: &domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionNewest, Size: 20},
-			page:      domain.ConversationList{Conversations: conversationsOf("c1")},
-			want:      domain.ConversationList{Direction: domain.DirectionNewest, Size: 20, Conversations: conversationsOf("c1"), BeforeCursor: "c1", AfterCursor: "c1"},
+			page:      domain.ConversationList{Conversations: conversationsAt(at, "c1")},
+			want:      domain.ConversationList{Direction: domain.DirectionNewest, Size: 20, Conversations: conversationsAt(at, "c1"), BeforeCursor: cursorOf(10, "c1"), AfterCursor: cursorOf(10, "c1")},
 		},
 		{
 			name:      "pageSizeTravelsWithACursor",
-			req:       service.ConversationsRequest{IDYapeAccount: "acc-1", Before: ptr("c1"), Size: ptr("1")},
-			wantQuery: &domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionBefore, CursorID: "c1", Size: 1},
-			page:      domain.ConversationList{Conversations: conversationsOf("b1"), HasMore: true},
-			want:      domain.ConversationList{Direction: domain.DirectionBefore, Size: 1, Conversations: conversationsOf("b1"), HasMore: true, BeforeCursor: "b1", AfterCursor: "b1"},
+			req:       service.ConversationsRequest{IDYapeAccount: "acc-1", Before: ptr(cursorOf(10, "c1")), Size: ptr("1")},
+			wantQuery: &domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionBefore, Cursor: cursorC1, Size: 1},
+			page:      domain.ConversationList{Conversations: conversationsAt(at, "b1"), HasMore: true},
+			want:      domain.ConversationList{Direction: domain.DirectionBefore, Size: 1, Conversations: conversationsAt(at, "b1"), HasMore: true, BeforeCursor: cursorOf(5, "b1"), AfterCursor: cursorOf(5, "b1")},
 		},
 		{
 			name:      "accountWithNoConversationsIsAnEmptyPageWithoutCursors",
@@ -294,13 +306,13 @@ func TestConversations(t *testing.T) {
 			name:      "uuidAccount",
 			req:       service.ConversationsRequest{IDYapeAccount: "c59f8a80-6e65-4d1b-9c0e-0a1b2c3d4e5f"},
 			wantQuery: &domain.ConversationQuery{IDYapeAccount: "c59f8a80-6e65-4d1b-9c0e-0a1b2c3d4e5f", Direction: domain.DirectionNewest, Size: domain.ConversationListSize},
-			page:      domain.ConversationList{Conversations: conversationsOf("c1")},
-			want:      domain.ConversationList{Direction: domain.DirectionNewest, Size: domain.ConversationListSize, Conversations: conversationsOf("c1"), BeforeCursor: "c1", AfterCursor: "c1"},
+			page:      domain.ConversationList{Conversations: conversationsAt(at, "c1")},
+			want:      domain.ConversationList{Direction: domain.DirectionNewest, Size: domain.ConversationListSize, Conversations: conversationsAt(at, "c1"), BeforeCursor: cursorOf(10, "c1"), AfterCursor: cursorOf(10, "c1")},
 		},
 		{
-			name:      "theLongestCursorIsAccepted",
-			req:       service.ConversationsRequest{IDYapeAccount: "acc-1", Before: ptr(longID)},
-			wantQuery: &domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionBefore, CursorID: longID, Size: domain.ConversationListSize},
+			name:      "aCursorOfAnyAccountIsJustAPosition",
+			req:       service.ConversationsRequest{IDYapeAccount: "acc-1", Before: ptr(cursorOf(10, "someone-elses"))},
+			wantQuery: &domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionBefore, Cursor: domain.ConversationCursor{LastOccurredAt: instant(10), ConversationID: "someone-elses"}, Size: domain.ConversationListSize},
 			page:      domain.ConversationList{Conversations: []domain.ConversationSummary{}},
 			want:      domain.ConversationList{Direction: domain.DirectionBefore, Size: domain.ConversationListSize, Conversations: []domain.ConversationSummary{}},
 		},
@@ -312,11 +324,12 @@ func TestConversations(t *testing.T) {
 		{name: "anEmptyCursorBesideARealOneIsStillTwoCursors", req: service.ConversationsRequest{IDYapeAccount: "acc-1", Before: ptr(""), After: ptr("b")}, wantErr: domain.ErrInvalidRequest, wantErrText: "cannot be used together"},
 		{name: "emptyBeforeIsAnInvalidCursor", req: service.ConversationsRequest{IDYapeAccount: "acc-1", Before: ptr("")}, wantErr: domain.ErrInvalidCursor},
 		{name: "emptyAfterIsAnInvalidCursor", req: service.ConversationsRequest{IDYapeAccount: "acc-1", After: ptr("")}, wantErr: domain.ErrInvalidCursor},
-		{name: "cursorWithASpace", req: service.ConversationsRequest{IDYapeAccount: "acc-1", Before: ptr("c 1")}, wantErr: domain.ErrInvalidCursor},
-		{name: "cursorWithSQLCharacters", req: service.ConversationsRequest{IDYapeAccount: "acc-1", After: ptr("x'; drop table--")}, wantErr: domain.ErrInvalidCursor},
-		{name: "cursorWithASlash", req: service.ConversationsRequest{IDYapeAccount: "acc-1", Before: ptr("../etc")}, wantErr: domain.ErrInvalidCursor},
-		{name: "cursorTooLong", req: service.ConversationsRequest{IDYapeAccount: "acc-1", Before: ptr(strings.Repeat("c", 129))}, wantErr: domain.ErrInvalidCursor},
-		{name: "cursorWithANulCharacter", req: service.ConversationsRequest{IDYapeAccount: "acc-1", After: ptr("c\x001")}, wantErr: domain.ErrInvalidCursor},
+		{name: "aConversationIDIsNoLongerACursor", req: service.ConversationsRequest{IDYapeAccount: "acc-1", Before: ptr("conv_v1_a")}, wantErr: domain.ErrInvalidCursor},
+		{name: "cursorWithoutTheSeparator", req: service.ConversationsRequest{IDYapeAccount: "acc-1", After: ptr("12345")}, wantErr: domain.ErrInvalidCursor},
+		{name: "cursorWithASpaceInTheID", req: service.ConversationsRequest{IDYapeAccount: "acc-1", Before: ptr("5~c 1")}, wantErr: domain.ErrInvalidCursor},
+		{name: "cursorWithSQLCharacters", req: service.ConversationsRequest{IDYapeAccount: "acc-1", After: ptr("5~x'; drop table--")}, wantErr: domain.ErrInvalidCursor},
+		{name: "cursorTooLong", req: service.ConversationsRequest{IDYapeAccount: "acc-1", Before: ptr("5~" + strings.Repeat("c", 129))}, wantErr: domain.ErrInvalidCursor},
+		{name: "cursorWithANulCharacter", req: service.ConversationsRequest{IDYapeAccount: "acc-1", After: ptr("5~c\x001")}, wantErr: domain.ErrInvalidCursor},
 		{name: "pageSizeZero", req: service.ConversationsRequest{IDYapeAccount: "acc-1", Size: ptr("0")}, wantErr: domain.ErrInvalidRequest, wantErrText: "page[size]"},
 		{name: "pageSizeOverTheMaximum", req: service.ConversationsRequest{IDYapeAccount: "acc-1", Size: ptr("101")}, wantErr: domain.ErrInvalidRequest, wantErrText: "page[size]"},
 		{name: "pageSizeEmpty", req: service.ConversationsRequest{IDYapeAccount: "acc-1", Size: ptr("")}, wantErr: domain.ErrInvalidRequest, wantErrText: "page[size]"},
@@ -327,12 +340,6 @@ func TestConversations(t *testing.T) {
 		{name: "aMissingAccountIsReportedBeforeABadPageSize", req: service.ConversationsRequest{Size: ptr("0")}, wantErr: domain.ErrInvalidRequest, wantErrText: "idYapeAccount"},
 		{name: "aBadPageSizeIsReportedBeforeABadCursor", req: service.ConversationsRequest{IDYapeAccount: "acc-1", Size: ptr("0"), Before: ptr("")}, wantErr: domain.ErrInvalidRequest, wantErrText: "page[size]"},
 		{name: "aGoodPageSizeStillLetsABadCursorThrough", req: service.ConversationsRequest{IDYapeAccount: "acc-1", Size: ptr("5"), Before: ptr("")}, wantErr: domain.ErrInvalidCursor},
-		{
-			name:      "cursorOfAnotherAccount",
-			req:       service.ConversationsRequest{IDYapeAccount: "acc-1", Before: ptr("theirs")},
-			wantQuery: &domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionBefore, CursorID: "theirs", Size: domain.ConversationListSize},
-			repoErr:   domain.ErrInvalidCursor, wantErr: domain.ErrInvalidCursor,
-		},
 		{
 			name:      "storeError",
 			req:       service.ConversationsRequest{IDYapeAccount: "acc-1"},

@@ -91,6 +91,16 @@ func TestSchema(t *testing.T) {
 					"occurred_at":     {"timestamp with time zone", false},
 				},
 			},
+			{
+				table: "conversation_summaries",
+				want: map[string]column{
+					"id_yape_account":   {"text", false},
+					"conversation_id":   {"character varying", false},
+					"message_count":     {"integer", false},
+					"first_occurred_at": {"timestamp with time zone", false},
+					"last_occurred_at":  {"timestamp with time zone", false},
+				},
+			},
 		}
 
 		for _, tt := range tests {
@@ -122,6 +132,16 @@ func TestSchema(t *testing.T) {
 				want:  "conversation_id,sequence",
 			},
 			{
+				name:  "summariesPrimaryKeyStartsWithTheAccount",
+				query: `SELECT string_agg(a.attname, ',' ORDER BY array_position(i.indkey::int2[], a.attnum)) FROM pg_index i JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY (i.indkey) WHERE i.indrelid = 'conversation_summaries'::regclass AND i.indisprimary`,
+				want:  "id_yape_account,conversation_id",
+			},
+			{
+				name:  "summariesListIndexMatchesTheOrderOfTheList",
+				query: `SELECT indexdef FROM pg_indexes WHERE indexname = 'conversation_summaries_list_idx'`,
+				want:  "CREATE INDEX conversation_summaries_list_idx ON public.conversation_summaries USING btree (id_yape_account, last_occurred_at DESC, conversation_id DESC)",
+			},
+			{
 				name:  "accountListIndex",
 				query: `SELECT indexdef FROM pg_indexes WHERE indexname = 'conversation_messages_account_idx'`,
 				want:  "CREATE INDEX conversation_messages_account_idx ON public.conversation_messages USING btree (id_yape_account, occurred_at DESC)",
@@ -138,7 +158,7 @@ func TestSchema(t *testing.T) {
 	})
 
 	t.Run("everyColumnHasAComment", func(t *testing.T) {
-		tests := []struct{ table string }{{"conversation_inbox"}, {"conversation_messages"}}
+		tests := []struct{ table string }{{"conversation_inbox"}, {"conversation_messages"}, {"conversation_summaries"}}
 
 		for _, tt := range tests {
 			t.Run(tt.table, func(t *testing.T) {
@@ -162,12 +182,19 @@ func TestSchema(t *testing.T) {
 		const insertMessage = `INSERT INTO conversation_messages (conversation_id, sequence, role, author_id, text, event_name, occurred_at)
 			VALUES ('c', $1::int, $2, 'a', 'hi', 'E', now())`
 
+		const insertSummary = `INSERT INTO conversation_summaries (id_yape_account, conversation_id, message_count, first_occurred_at, last_occurred_at)
+			VALUES ('a', $1, $2::int, $3::timestamptz, $4::timestamptz)`
+
 		tests := []struct {
 			name    string
 			sql     string
 			args    []any
 			wantErr string
 		}{
+			{name: "summary", sql: insertSummary, args: []any{"s1", 1, "2026-10-20T10:00:00Z", "2026-10-20T10:00:00Z"}},
+			{name: "summaryCountMustBePositive", sql: insertSummary, args: []any{"s2", 0, "2026-10-20T10:00:00Z", "2026-10-20T10:00:00Z"}, wantErr: "conversation_summaries_message_count_check"},
+			{name: "summaryFirstMustNotBeAfterLast", sql: insertSummary, args: []any{"s3", 2, "2026-10-20T11:00:00Z", "2026-10-20T10:00:00Z"}, wantErr: "conversation_summaries_check"},
+			{name: "repeatedSummaryIsRejected", sql: insertSummary, args: []any{"s1", 1, "2026-10-20T10:00:00Z", "2026-10-20T10:00:00Z"}, wantErr: "conversation_summaries_pkey"},
 			{name: "actorUser", sql: insertInbox, args: []any{1, "user"}},
 			{name: "actorAgent", sql: insertInbox, args: []any{2, "agent"}},
 			{name: "actorSystem", sql: insertInbox, args: []any{3, "system"}},

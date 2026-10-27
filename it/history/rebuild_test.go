@@ -23,7 +23,7 @@ func TestRebuild(t *testing.T) {
 
 	load := func(t *testing.T, events []domain.InboxEvent) {
 		t.Helper()
-		_, err := pool.Exec(ctx, "TRUNCATE conversation_messages, conversation_inbox")
+		_, err := pool.Exec(ctx, "TRUNCATE conversation_summaries, conversation_messages, conversation_inbox")
 		require.NoError(t, err)
 
 		for _, e := range events {

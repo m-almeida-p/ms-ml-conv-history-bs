@@ -2,6 +2,7 @@ package history_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -23,13 +24,13 @@ const (
 	giantTextBytes    = 200 // a chat line; the agent cuts longer ones
 )
 
-// messagesRowsRead is the most rows any scan of conversation_messages returned.
-func messagesRowsRead(t *testing.T, plan []string) int {
+// rowsRead is the most rows any scan of the named table returned.
+func rowsRead(t *testing.T, plan []string, table string) int {
 	t.Helper()
 
 	most := 0
 	for _, line := range plan {
-		if !strings.Contains(line, "conversation_messages") || !strings.Contains(line, "Scan") {
+		if !strings.Contains(line, table) || !strings.Contains(line, "Scan") {
 			continue
 		}
 		match := scanRows.FindStringSubmatch(line)
@@ -40,6 +41,11 @@ func messagesRowsRead(t *testing.T, plan []string) int {
 	}
 
 	return most
+}
+
+// messagesRowsRead is the most rows any scan of conversation_messages returned.
+func messagesRowsRead(t *testing.T, plan []string) int {
+	return rowsRead(t, plan, "conversation_messages")
 }
 
 // measure logs what one paging statement cost: the rows its scan of conversation_messages
@@ -86,7 +92,8 @@ func TestMessagePagingAtVolume(t *testing.T) {
 		       now() - interval '2 days' + s * interval '1 second'
 		FROM generate_series(1, $2) s`, giantConversation, giantMessages, giantTextBytes)
 	require.NoError(t, err)
-	_, err = pool.Exec(ctx, `ANALYZE conversation_messages`)
+	refreshSummaries(t, pool)
+	_, err = pool.Exec(ctx, `ANALYZE conversation_messages; ANALYZE conversation_summaries`)
 	require.NoError(t, err)
 
 	var tableRows int
@@ -187,12 +194,15 @@ const (
 	heavyAccount       = "acc_heavy"
 	heavyConversations = 5_000
 	heavyMessagesEach  = 4
+	smallAccount       = "acc_77" // ten conversations, from loadVolume
 )
 
 // TestConversationPagingAtVolume: one account with 5,000 conversations (20,000 messages) among 400,000
-// messages. A page of conversations is built by grouping the account's messages, so its cost follows
-// the account's history, not the table and not the size of the page. The checks count rows and pages,
-// which do not depend on the machine; the time ceilings are far above a run.
+// messages. A page of conversations reads conversation_summaries, one row per conversation, so what it
+// costs follows the page and not the account's history: it reads the rows it returns and one more, from
+// the index, and touches the same pages for the heavy account as for a small one. (Grouping the messages,
+// as the list did before the table, read all 20,000 of the account's messages for every page.) The checks
+// count rows and pages, which do not depend on the machine; the time ceilings are far above a run.
 func TestConversationPagingAtVolume(t *testing.T) {
 	if testing.Short() {
 		t.Skip("loads 400,000 messages")
@@ -209,12 +219,14 @@ func TestConversationPagingAtVolume(t *testing.T) {
 		       now() - interval '3 days' + c * interval '1 minute' + s * interval '1 second'
 		FROM generate_series(1, $2) c, generate_series(1, $3) s`, heavyAccount, heavyConversations, heavyMessagesEach)
 	require.NoError(t, err)
-	_, err = pool.Exec(ctx, `ANALYZE conversation_messages`)
+	refreshSummaries(t, pool)
+	_, err = pool.Exec(ctx, `ANALYZE conversation_messages; ANALYZE conversation_summaries`)
 	require.NoError(t, err)
 
-	var tablePages int
-	require.NoError(t, pool.QueryRow(ctx, `SELECT relpages FROM pg_class WHERE relname = 'conversation_messages'`).Scan(&tablePages))
-	t.Logf("MEASURE conversation_messages: %d pages", tablePages)
+	var summaryRows int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM conversation_summaries`).Scan(&summaryRows))
+	t.Logf("MEASURE conversation_summaries: %d rows", summaryRows)
+	require.Greater(t, summaryRows, 20_000, "the volume should be large")
 
 	newest := pagingSQL(t, "list_conversations.sql")
 	before := pagingSQL(t, "list_conversations_before.sql")
@@ -222,30 +234,57 @@ func TestConversationPagingAtVolume(t *testing.T) {
 	repo := repository.NewPostgresMessageRepository(pool)
 
 	var cursorAt time.Time
-	require.NoError(t, pool.QueryRow(ctx, `SELECT max(occurred_at) FROM conversation_messages WHERE conversation_id = 'heavy_02500'`).Scan(&cursorAt))
+	require.NoError(t, pool.QueryRow(ctx, `SELECT last_occurred_at FROM conversation_summaries WHERE conversation_id = 'heavy_02500'`).Scan(&cursorAt))
 
-	t.Run("aPageGroupsTheAccountsMessagesAndNothingElse", func(t *testing.T) {
-		for name, run := range map[string][]any{"newest": {newest, heavyAccount, 101}, "before": {before, heavyAccount, cursorAt, "heavy_02500", 101}, "after": {after, heavyAccount, cursorAt, "heavy_02500", 101}} {
-			query := run[0].(string)
-			plan := planOf(t, pool, query, run[1:]...)
-			measure(t, "conversations "+name+", size 100", plan)
+	// planFor runs the statement of a direction for an account with a page of the given size.
+	planFor := func(account, direction string, size int) []string {
+		switch direction {
+		case "newest":
+			return planOf(t, pool, newest, account, size+1)
+		case "before":
+			return planOf(t, pool, before, account, cursorAt, "heavy_02500", size+1)
+		}
 
-			joined := strings.Join(plan, "\n")
-			assert.NotContains(t, joined, "Seq Scan", "%s scans the table:\n%s", name, joined)
-			assert.LessOrEqual(t, messagesRowsRead(t, plan), heavyConversations*heavyMessagesEach, "%s reads other accounts' messages:\n%s", name, joined)
-			assert.Less(t, pagesTouched(t, plan), tablePages/10, "%s touches a tenth of the table or more:\n%s", name, joined)
+		return planOf(t, pool, after, account, cursorAt, "heavy_02500", size+1)
+	}
+	measure := func(what string, plan []string) {
+		took := ""
+		for _, line := range plan {
+			if strings.HasPrefix(line, "Execution Time:") {
+				took = strings.TrimSpace(strings.TrimPrefix(line, "Execution Time:"))
+			}
+		}
+		t.Logf("MEASURE %-34s rows read %-4d pages %-3d execution %s", what, rowsRead(t, plan, "conversation_summaries"), pagesTouched(t, plan), took)
+	}
+
+	t.Run("aPageReadsSizePlusOneRowsFromTheIndexAndNothingElse", func(t *testing.T) {
+		for _, direction := range []string{"newest", "before", "after"} {
+			for _, size := range []int{1, 10, domain.ConversationListSize} {
+				plan := planFor(heavyAccount, direction, size)
+				measure(fmt.Sprintf("conversations %s, size %d", direction, size), plan)
+				joined := strings.Join(plan, "\n")
+
+				assert.Equal(t, size+1, rowsRead(t, plan, "conversation_summaries"), "%s, size %d reads one row more than the page:\n%s", direction, size, joined)
+				assert.NotContains(t, joined, "Seq Scan", "%s, size %d scans the table:\n%s", direction, size, joined)
+				assert.NotContains(t, joined, "Sort", "%s, size %d sorts instead of reading the index in order:\n%s", direction, size, joined)
+				assert.NotContains(t, joined, "conversation_messages", "%s, size %d reads the messages:\n%s", direction, size, joined)
+				assert.Contains(t, joined, "conversation_summaries_list_idx", "%s, size %d does not use the list index:\n%s", direction, size, joined)
+				assert.LessOrEqual(t, pagesTouched(t, plan), size+8, "%s, size %d touches %d pages", direction, size, pagesTouched(t, plan))
+			}
 		}
 	})
 
-	t.Run("theCostDoesNotFollowThePageSize", func(t *testing.T) {
-		pages := map[int]int{}
-		for _, size := range []int{1, 10, 100} {
-			plan := planOf(t, pool, newest, heavyAccount, size+1)
-			measure(t, "conversations newest, size "+strconv.Itoa(size), plan)
-			pages[size] = pagesTouched(t, plan)
-		}
+	t.Run("theCostFollowsTheRowsAPageReadsAndNotTheSizeOfTheAccount", func(t *testing.T) {
+		for _, direction := range []string{"newest", "before", "after"} {
+			for _, account := range []string{heavyAccount, smallAccount} {
+				plan := planFor(account, direction, 10)
+				measure(account+", "+direction, plan)
 
-		assert.LessOrEqual(t, pages[100]-pages[1], pages[1]/2+10, "the pages touched are the account's history, whatever the page size: %v", pages)
+				// About one page of the table for each row read, plus the index: the same for an account
+				// with five thousand conversations as for one with ten.
+				assert.LessOrEqual(t, pagesTouched(t, plan), rowsRead(t, plan, "conversation_summaries")+4, "%s, %s", account, direction)
+			}
+		}
 	})
 
 	t.Run("walkingAllConversationsVisitsEachOnce", func(t *testing.T) {
@@ -266,14 +305,15 @@ func TestConversationPagingAtVolume(t *testing.T) {
 			if !list.HasMore {
 				break
 			}
+			oldest := list.Conversations[len(list.Conversations)-1]
 			query = domain.ConversationQuery{IDYapeAccount: heavyAccount, Direction: domain.DirectionBefore, Size: domain.ConversationListSize,
-				CursorID: list.Conversations[len(list.Conversations)-1].ConversationID}
+				Cursor: domain.NewConversationCursor(oldest.LastOccurredAt, oldest.ConversationID)}
 		}
 
 		sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
 		t.Logf("MEASURE walk of %d conversations in %d pages: %s; page latency median %s, slowest %s",
 			len(seen), len(latencies), time.Since(started).Round(time.Millisecond),
-			latencies[len(latencies)/2].Round(100*time.Microsecond), latencies[len(latencies)-1].Round(100*time.Microsecond))
+			latencies[len(latencies)/2].Round(10*time.Microsecond), latencies[len(latencies)-1].Round(10*time.Microsecond))
 		assert.Len(t, seen, heavyConversations)
 		assert.Less(t, latencies[len(latencies)-1], 3*time.Second, "the slowest page")
 	})
