@@ -4,7 +4,7 @@ Ticket AIP-472, as of 2026-10-20. The pipeline runs end to end locally (agent ev
 inbox, chat history, API). This file lists what is not proven or not built for production.
 
 Status values: **Unproven** (designed from research, never run), **Not started**, **Decision** (someone has
-to choose), **Known gap** (built, with a stated limit).
+to choose), **Known gap** (built, with a stated limit), **Built** (works and is tested, with no known gap).
 
 ## 1. Production CDC: the request to DevOps
 
@@ -39,7 +39,7 @@ only: no Postgres, no connector.
 | 2.6 | Metrics and alerts | The consumer logs its counters when it stops; there is no metrics endpoint and no alert on consumer lag or on the replication slot | Not started |
 | 2.7 | Dead-letter queue | Malformed and rejected records are logged, counted and skipped. Production needs a DLQ to keep them | Known gap |
 | 2.8 | Throughput | The library's loop handles the 3 partitions one record at a time. `internal/core/async/usage_test.go` shows the one-worker-per-partition pattern for when volume asks for it | Known gap |
-| 2.9 | Conversation list | Paged with cursors and the `Link` header, like the messages. Each page groups the account's messages, so its cost follows the account's history (422 pages touched, about 3 ms, for 20,000 messages in 5,000 conversations); a conversations table is the step for accounts with millions | Known limit |
+| 2.9 | Conversation list | Paged with position cursors and the `Link` header, read from `conversation_summaries` (one row per conversation, kept by the consumer): a page reads the rows it returns, 0.03 to 0.05 ms for a page of 100 whatever the account's history. Every request has a 10 second deadline (503 past it) | Built |
 
 ## 3. The agent side
 

@@ -14,7 +14,9 @@ flowchart LR
     K --> C["cmd/consumer"]
     C -->|"one transaction"| I[("conversation_inbox")]
     C -->|"same transaction"| M[("conversation_messages")]
+    C -->|"same transaction"| S[("conversation_summaries")]
     M --> H["cmd/api :3100"]
+    S --> H
     H --> U["Client"]
 ```
 
@@ -60,14 +62,14 @@ and the connector registered from `../ms-ml-genai-agents-bs/local/debezium/regis
 curl -s "localhost:3100/v1/conversations?idYapeAccount=<account>"
 curl -s "localhost:3100/v1/conversations/<conversationId>/messages"
 curl -sg "localhost:3100/v1/conversations/<conversationId>/messages?page[before]=<_id>&page[size]=20"
-curl -sg "localhost:3100/v1/conversations?idYapeAccount=<account>&page[before]=<conversationId>"
+curl -sg "localhost:3100/v1/conversations?idYapeAccount=<account>&page[before]=<cursor>"   # the cursor of a conversation, or the one in the Link header
 curl -s  localhost:3100/health
 ```
 
 | Route | Answer |
 |-------|--------|
 | `GET /v1/conversations/{conversationId}/messages` | up to 100 messages, oldest first; `page[before]` or `page[after]` (one at most) take a message `_id`, `page[size]` asks for fewer; more pages are announced in the `Link` header |
-| `GET /v1/conversations?idYapeAccount=&page[before]=&page[after]=&page[size]=` | a page of the account's conversations with chat messages, most recent first; more pages are announced in the `Link` header |
+| `GET /v1/conversations?idYapeAccount=&page[before]=&page[after]=&page[size]=` | a page of the account's conversations with chat messages, most recent first; each carries an opaque `cursor`; more pages are announced in the `Link` header |
 | `GET /health` | `200` when the database answers, `503` otherwise |
 
 The contract is `docs/ms-ml-conv-history-bs-openapi.yml` (Swagger 2.0), generated from the swag annotations
@@ -75,9 +77,11 @@ in `cmd/api/main.go` and the handlers, as in `cpgs-clg-core`: `make openapi` reg
 `make openapi/check` fails when it is stale. A test fails when a served route is not documented, and
 another when a reply carries a field the spec does not describe.
 
-Errors: `400` for a malformed id, both cursors, or a cursor that is not a message of that
-conversation; `404` for a conversation with no chat messages. `docs/design.md` has the reply
-shape and the paging rule.
+Errors are RFC 9457 problem details served as `application/problem+json` (`type`, `title`,
+`status`, `detail`): `400` for a malformed id or account, both cursors, a bad `page[size]` or a
+cursor the API did not issue; `404` for a conversation with no chat messages; `503` for a request
+that ran past its 10 second deadline. A client decides from `type`. `docs/design.md` has the
+problem types and the paging rules.
 
 ## Configuration
 
@@ -102,7 +106,7 @@ shape and the paging rule.
 
 ## Database
 
-The tables (`conversation_inbox`, `conversation_messages`) are created by the migrations in
+The tables (`conversation_inbox`, `conversation_messages`, `conversation_summaries`, which the conversation list reads) are created by the migrations in
 `../ml-genai-agents-bs-testing/migrations/history/conversation/`, next to the agent's
 (`migrations/agent/conversation/`). Each flow gets its own folder.
 

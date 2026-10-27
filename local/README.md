@@ -33,7 +33,7 @@ make pipeline
 Needs the cluster up and the connector `RUNNING`. It starts a throwaway Postgres for the
 history, runs the real consumer binary and checks:
 
-- rows inserted in the agent's `conversation_events` reach `conversation_messages` through
+- rows inserted in the agent's `conversation_events` reach `conversation_messages` and `conversation_summaries` through
   Debezium and Kafka (the test removes its rows afterwards);
 - the same record sent three times leaves one inbox row;
 - records sent in reverse order across partitions read back in order;
@@ -61,6 +61,7 @@ It waits for the consumer to catch up, prints one line per conversation and ends
 | Pipeline | every row of `conversation_events` is in the inbox |
 | Per conversation | the user, agent and guardrail events of `conversation_events` against `conversation_messages` and against the API (it follows the `prev` links): same count, same text, same event, nothing missing or extra |
 | Excluded events | no text of a blocked input, tool summary or notification is in the history or in any API reply |
+| Summaries | `conversation_summaries`, which the conversation list reads, equals what grouping the messages gives (section 2b); `consumer rebuild` repairs any difference |
 | Rebuild | `consumer rebuild` leaves the messages table identical |
 
 Settings: `PG_CONTAINER` (`yape-postgres`), `API_URL` (`http://localhost:3100`), `REQUIRE_API=1` to fail when
@@ -68,7 +69,7 @@ the API is down, `REBUILD=no` to skip the rebuild, `WAIT_SECONDS` (60). The scri
 fewer conversations than the event store holds. After `run.sh --clean`, empty the history too:
 
 ```bash
-docker exec yape-postgres psql -U postgres -c "TRUNCATE conversation_messages, conversation_inbox"
+docker exec yape-postgres psql -U postgres -c "TRUNCATE conversation_summaries, conversation_messages, conversation_inbox"
 ```
 
 ## When events are deleted and written again

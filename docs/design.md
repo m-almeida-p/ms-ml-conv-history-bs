@@ -119,7 +119,15 @@ erDiagram
         text flow "p2p, bill_payment, ... or NULL"
         timestamptz occurred_at
     }
+    conversation_summaries {
+        text id_yape_account PK "with conversation_id"
+        varchar conversation_id PK
+        int message_count
+        timestamptz first_occurred_at
+        timestamptz last_occurred_at "orders the list"
+    }
     conversation_inbox ||..o| conversation_messages : "a chat event gives one message"
+    conversation_messages }o..|| conversation_summaries : "a new message is counted here"
 ```
 
 The inbox keeps every event that arrives, chat or not, with the Kafka coordinates it came from.
@@ -127,6 +135,17 @@ It is the source a rebuild replays. `projected_at` is set in the same transactio
 projection, so a stamped row is a processed row. An event that should have projected but lacks its
 text is stamped too (it is stored without a message and counted as invalid), so `projected_at` does not
 find those; the `invalid` counter and the log do.
+
+`conversation_summaries` (history migration `000003`) has one row per conversation of an account: its message count and the times of
+its first and last message. The conversation list reads it, so a page costs the rows it returns and not the account's history (see
+Paging the conversation list). The consumer keeps it in the same transaction that writes a message, and only for a message that was
+not stored yet: it adds one to the count and widens the first and last times. Those updates commute, so events in any order, or two
+writers at once, end with the same row, and a redelivery or a replay cannot count a message twice. A message with no account is in no
+account's list and is not counted. The primary key is `(id_yape_account, conversation_id)`; the index
+`conversation_summaries_list_idx (id_yape_account, last_occurred_at DESC, conversation_id DESC)` is the order of the list. Both of its
+columns run the same way on purpose: the cursor is the pair `(last_occurred_at, conversation_id)`, and Postgres turns a comparison of
+two such pairs into the boundary of an index scan only when the columns run in the same direction. The migration fills the table
+from the messages already stored, and running it again rewrites the same values.
 
 **Conversation ids are never reused.** The inbox key is `(conversation_id, sequence)`. If a deleted
 conversation's id were used again, its new events would meet the inbox's copies: different content is
@@ -202,9 +221,10 @@ without its text field is invalid, not skipped. An empty string is a valid text.
 
 **Order does not depend on arrival.** The key of a message is `(conversation_id, sequence)`, the
 position the agent gave the event, so records read from three partitions in any order give the
-same rows. **Rebuild** deletes the messages and replays the inbox in `(conversation_id, sequence)`
-order, in keyset batches of 500, in one transaction: readers see the old rows until the commit,
-and a cancelled run changes nothing. The inbox is never modified.
+same rows. **Rebuild** deletes the messages and their conversation summaries and replays the inbox in
+`(conversation_id, sequence)` order, in keyset batches of 500, in one transaction: the replay writes the
+messages and counts them again, readers see the old rows until the commit, and a cancelled run changes
+nothing. The inbox is never modified. A rebuild also repairs summaries that drifted for any reason.
 
 ## API
 
@@ -288,44 +308,63 @@ A conversation is known when it has chat messages; a conversation of tool events
 
 `GET /v1/conversations?idYapeAccount=` pages the same way as the messages, so a client that can walk one can walk the other.
 The body holds the conversations only, most recent first inside a page; the way to another page is the `Link` header.
+Each conversation carries a `cursor`, its position in the list when it was read.
 
 ```http
 GET /v1/conversations?idYapeAccount=acc-1&page[size]=2
 HTTP/1.1 200 OK
-Link: </v1/conversations?idYapeAccount=acc-1&page[before]=conv_v1_b&page[size]=2>; rel="prev"
+Link: </v1/conversations?idYapeAccount=acc-1&page[before]=1792505243500000~conv_v1_b&page[size]=2>; rel="prev"
 ```
 ```json
 { "conversations": [
-  { "_id": "conv_v1_a", "messageCount": 5, "firstReceived": 1792505243.5, "lastReceived": 1792505543.5 },
-  { "_id": "conv_v1_b", "messageCount": 1, "firstReceived": 1792505243.5, "lastReceived": 1792505243.5 } ] }
+  { "_id": "conv_v1_a", "cursor": "1792505543500000~conv_v1_a", "messageCount": 5, "firstReceived": 1792505243.5, "lastReceived": 1792505543.5 },
+  { "_id": "conv_v1_b", "cursor": "1792505243500000~conv_v1_b", "messageCount": 1, "firstReceived": 1792505243.5, "lastReceived": 1792505243.5 } ] }
 ```
 
 | Request | Returns | `Link` header |
 |---------|---------|---------------|
-| no cursor | the most recent conversations | `rel="prev"` = `page[before]=<oldest _id of the page>` when older ones exist |
-| `page[before]=X` | the conversations just older than `X` (less recently active) | `rel="prev"`, same rule |
-| `page[after]=X` | the conversations just more recent than `X` | `rel="next"` = `page[after]=<most recent _id of the page>` when more recent ones exist |
+| no cursor | the most recent conversations | `rel="prev"` = `page[before]=<cursor of the oldest conversation of the page>` when older ones exist |
+| `page[before]=X` | the conversations just older than position `X` (less recently active) | `rel="prev"`, same rule |
+| `page[after]=X` | the conversations just more recent than position `X` | `rel="next"` = `page[after]=<cursor of the most recent conversation of the page>` when more recent ones exist |
 
-`before` and `after` mean what they mean for messages: older and newer in time. `page[size]` is 1 to 100 (default 100) and is repeated in the link when it is not 100. The
-cursor is a conversation `_id`; the server finds it among the account's own conversations, so an `_id` of another account, an unknown one, an empty one or one with
-characters outside `. _ : -`, letters and digits answers `400 invalid-cursor`. A page past the last conversation is `conversations: []` with no header; an account with
+`before` and `after` mean what they mean for messages: older and newer in time. `page[size]` is 1 to 100 (default 100) and is repeated in the link when it is not 100.
+
+**The cursor is a position, not a conversation.** A conversation moves to the top when it receives a message, so a cursor made only of its `_id` would point
+somewhere else by the time the next page was asked for, and a page could repeat a conversation. The cursor carries the position itself, the time of the
+conversation's last message in Unix microseconds and its `_id` as the tie-break, joined by `~` (`1792505543500000~conv_v1_a`). The server reads the position from the
+cursor and looks nothing up, so a walk is right whatever happens to the conversations in between. A client treats the cursor as opaque: it takes it from the `Link`
+header, or from the `cursor` of a conversation it holds, and never builds one. A conversation `_id` alone is not a cursor.
+
+A cursor is not tied to an account: it is only a position, and it reveals nothing about any account. The cursor of a conversation of another account, or of one that no
+longer exists, simply reads this account's conversations from that position. A value that is not in the form the API writes (empty, no `~`, a bad instant, an id with
+characters outside `. _ : -`, letters and digits) answers `400 invalid-cursor`. A page past the last conversation is `conversations: []` with no header; an account with
 none gets the same. The last page has no `Link` header.
 
-A page is cut by the time of a conversation's last message, with the conversation `_id` as the tie-break (`ORDER BY max(occurred_at) DESC, conversation_id`), so
-conversations that end at the same instant keep one order and no page repeats or skips one. A conversation that receives a message while a client is paging moves to the most
-recent end, so it does not appear again in the older pages; the client already has it and keeps the `_id`.
+To pick up what is new since the client last looked, it reads `page[after]` with the `cursor` it stored for the most recent conversation it held. That returns what is
+more recent than where that conversation stood, including the conversation itself if it was active again, and any new conversation that appeared in between.
 
-It reads the account's messages through `conversation_messages_account_idx (id_yape_account, occurred_at DESC)` and groups them, so a page costs what the account's history
-costs, not what the page size or the table costs. `it/history/paging_volume_test.go` loads one account with 5,000 conversations (20,000 messages) among 400,000 messages:
+A page is cut by the time of a conversation's last message, with the conversation `_id` as the tie-break, the larger first (`ORDER BY last_occurred_at DESC, conversation_id DESC`), so
+conversations that end at the same instant keep one order and no page repeats or skips one. `it/history/read_test.go` pins the cases that matter: a walk in both
+directions with ties, a cursor conversation that moves between two pages, and a catch-up after the conversation a client holds moved above a new one.
+
+A page reads `conversation_summaries`, one row per conversation, through `conversation_summaries_list_idx`, from its cursor, and stops after the rows it returns.
+What it costs follows the page and not the account's history, the size of the table or how deep the cursor is. `it/history/paging_volume_test.go` loads one account with
+5,000 conversations (20,000 messages) among 400,000 messages and reads the query plans:
 
 | Page | Rows read | Pages touched | Execution |
 |------|-----------|---------------|-----------|
-| most recent, size 1, 10 or 100 | 20,000 (the account's) | 422 of 4,966 | 2.7 to 4 ms |
-| `page[before]` or `page[after]`, size 100 | 20,000 | 422 | 2.9 ms |
+| most recent, `page[before]` or `page[after]`, size 1 | 2 | 4 to 5 | 0.01 to 0.03 ms |
+| size 10 | 11 | 13 to 14 | 0.01 to 0.02 ms |
+| size 100 | 101 | 103 to 105 | 0.03 to 0.05 ms |
 
-Walking all 5,000 conversations takes 50 calls at size 100 (0.19 s, median 3.7 ms a call). The plan has no sequential scan and reads no other account's messages. A
-covering index `(id_yape_account, conversation_id, occurred_at DESC)` gave an index-only scan, but not fewer buffers on the heavy account, so the index stays as it is. The
-step after that, when a single account reaches millions of messages, is a conversations table.
+Every page reads exactly one row more than it returns (which tells whether there is more), through the index, with no sequential scan and no sort, and touches the same
+pages for the account with five thousand conversations as for one with ten. Walking all 5,000 conversations takes 50 calls at size 100 (21 ms, median 0.3 ms a call).
+
+The tie-break descends with the time so that the cursor, the pair `(last_occurred_at, conversation_id)`, is the boundary of the index scan itself. With the tie-break
+running the other way, Postgres treats part of the cursor as a filter, and a page deep into a long list reads and sorts everything older than the cursor.
+
+Every request has a deadline of 10 seconds (`requestTimeout` in `internal/infrastructure/api/app.go`). A request that runs past it has its query cancelled and is answered
+`503` (see Errors), so a request cannot hold a connection for long. A page is cheap now, so the deadline is a safety net and not something a normal request comes near.
 
 ### Errors
 
@@ -359,11 +398,14 @@ The problem types, under `tag:yape.com.pe,2026:conversation-history:`:
 | Type | Status | Title | When |
 |------|--------|-------|------|
 | `invalid-request` | 400 | Invalid request | malformed conversation id or account, both cursors, no account, a bad or repeated `page[size]`, a parameter sent twice, a request Echo cannot read |
-| `invalid-cursor` | 400 | Invalid cursor | messages: not a plain decimal `_id`, or not a message of that conversation. Conversations: empty, malformed, or not a conversation of that account |
+| `invalid-cursor` | 400 | Invalid cursor | messages: not a plain decimal `_id`, or not a message of that conversation. Conversations: empty, or not in the form the API writes |
 | `conversation-not-found` | 404 | Conversation not found | no chat messages for that conversation |
 | `about:blank` | 404 | Not Found | an unknown route |
 | `about:blank` | 405 | Method Not Allowed | a method the route does not accept |
 | `about:blank` | 500 | Internal Server Error | store error; the cause goes to the log only, `detail` is a fixed sentence |
+| `about:blank` | 503 | Service Unavailable | the request ran past its 10 second deadline and its query was cancelled; trying again may work |
+| `about:blank` | any other 4xx Echo raises (415, 429 ...) | the status phrase | `detail` is "The request could not be processed."; nothing is wrong on our side |
+| `about:blank` | any other 5xx Echo raises | the status phrase | `detail` is a fixed sentence; the cause is logged |
 
 In code the domain has three sentinel errors, `ErrInvalidRequest`, `ErrInvalidCursor` and `ErrNotFound`, and the handler picks the problem type with `errors.Is`. An invalid
 request carries its words in a typed error, `domain.InvalidRequest(format, args...)` (an `*InvalidRequestError`), which still matches `ErrInvalidRequest`; the handler reads
@@ -392,7 +434,8 @@ sequence)`, upserts by position), and tests keep them correct as the code change
 
 | Guard | What it proves |
 |-------|----------------|
-| `TestConcurrentWriters` (real Postgres) | the same event from 30 writers is stored once; five consumers feeding the whole stream in five orders, and rebuilds running beside two consumers, leave the rows one writer leaves |
+| `TestConcurrentWriters` (real Postgres) | the same event from 30 writers is stored once; five consumers feeding the whole stream in five orders, and rebuilds running beside two consumers, leave the rows one writer leaves, the conversation summaries included |
+| `TestSummariesFollowTheMessages` (real Postgres) | eight writers on one conversation lose no count; twenty shuffled arrival orders give the same summary; a redelivery, a replay and an already stored message count once; a rebuild repairs a wrong count, a wrong time, a missing summary and a summary with no messages |
 | `TestServerAnswersTheSameWhenRequestsArriveAtOnce` | 64 requests over 8 routes at once answer as they do one at a time: the server holds no shared state |
 | service, projection, decoder, config guards | the same calls at once give the same results |
 | `TestConsumerCountersCanBeReadWhileItConsumes` | the consumer's counters can be read from another goroutine while it counts |
@@ -454,8 +497,9 @@ skipped and counted as malformed, with the field name in the log.
 
 | Task | How |
 |------|-----|
-| Recreate the messages | `go run ./cmd/consumer rebuild` |
-| Check the history against the event store | `local/scripts/verify.sh` |
+| Recreate the messages and the conversation summaries | `go run ./cmd/consumer rebuild` |
+| Check the history against the event store, and the summaries against the messages | `local/scripts/verify.sh` (section 2b reports `summaries-differing-from-messages`; a rebuild repairs them) |
+| Deploy the conversation summaries | stop the consumer, apply migration `000003` (it fills the table from the messages stored), then start the new consumer and API. An old consumer running after the migration would store messages without counting them; a rebuild repairs that |
 | Events deleted from the tail of a live conversation and written again | the new events reuse old positions and the inbox refuses them (rejected, logged at error level). Delete whole, closed conversations only. To start over, drop the history tables (`make migrations/down CONFIRM=yes`, then `up`) and reset the consumer group offsets (`local/README.md`) |
 | Events deleted from the event store | not published; the history keeps its copy of the conversation. Clear it from the history too if the deletion is for erasure |
 | Replication slot lag | a stopped connector with a live slot makes Postgres keep WAL; drop the slot when the connector is retired for good (`ms-ml-genai-agents-bs/local/debezium/README.md`) |
