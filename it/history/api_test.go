@@ -379,53 +379,66 @@ func TestAPI(t *testing.T) {
 			name       string
 			path       string
 			wantStatus int
-			wantCode   string
+			wantType   string
 		}{
-			{name: "bothCursors", path: "/v1/conversations/conv_big/messages?page[before]=100&page[after]=100", wantStatus: 400, wantCode: "invalid_request"},
-			{name: "cursorNotANumber", path: "/v1/conversations/conv_big/messages?page[before]=abc", wantStatus: 400, wantCode: "invalid_cursor"},
-			{name: "cursorOfNoMessage", path: "/v1/conversations/conv_big/messages?page[after]=99999", wantStatus: 400, wantCode: "invalid_cursor"},
-			{name: "unknownConversation", path: "/v1/conversations/conv_nope/messages", wantStatus: 404, wantCode: "not_found"},
-			{name: "malformedConversationID", path: "/v1/conversations/bad%20id/messages", wantStatus: 400, wantCode: "invalid_request"},
-			{name: "missingAccount", path: "/v1/conversations", wantStatus: 400, wantCode: "invalid_request"},
-			{name: "emptyCursor", path: "/v1/conversations/conv_big/messages?page[before]=", wantStatus: 400, wantCode: "invalid_cursor"},
-			{name: "emptyCursorBesideARealOne", path: "/v1/conversations/conv_big/messages?page[before]=&page[after]=100", wantStatus: 400, wantCode: "invalid_request"},
-			{name: "listBothCursors", path: "/v1/conversations?idYapeAccount=acc-list&page[before]=list_1&page[after]=list_2", wantStatus: 400, wantCode: "invalid_request"},
-			{name: "listCursorOfAnotherAccount", path: "/v1/conversations?idYapeAccount=acc-list&page[before]=conv_big", wantStatus: 400, wantCode: "invalid_cursor"},
-			{name: "listCursorThatDoesNotExist", path: "/v1/conversations?idYapeAccount=acc-list&page[after]=nope", wantStatus: 400, wantCode: "invalid_cursor"},
-			{name: "listEmptyCursor", path: "/v1/conversations?idYapeAccount=acc-list&page[before]=", wantStatus: 400, wantCode: "invalid_cursor"},
-			{name: "listMalformedCursor", path: "/v1/conversations?idYapeAccount=acc-list&page[before]=a%20b", wantStatus: 400, wantCode: "invalid_cursor"},
-			{name: "listPageSizeZero", path: "/v1/conversations?idYapeAccount=acc-list&page[size]=0", wantStatus: 400, wantCode: "invalid_request"},
-			{name: "listPageSizeOverTheMaximum", path: "/v1/conversations?idYapeAccount=acc-list&page[size]=101", wantStatus: 400, wantCode: "invalid_request"},
-			{name: "listRepeatedCursor", path: "/v1/conversations?idYapeAccount=acc-list&page[before]=list_1&page[before]=list_2", wantStatus: 400, wantCode: "invalid_request"},
-			{name: "listBadSizeBesideABadCursorIsASizeError", path: "/v1/conversations?idYapeAccount=acc-list&page[size]=0&page[before]=nope", wantStatus: 400, wantCode: "invalid_request"},
-			{name: "pageSizeZero", path: "/v1/conversations/conv_big/messages?page[size]=0", wantStatus: 400, wantCode: "invalid_request"},
-			{name: "pageSizeOverTheMaximum", path: "/v1/conversations/conv_big/messages?page[size]=101", wantStatus: 400, wantCode: "invalid_request"},
-			{name: "pageSizeNotANumber", path: "/v1/conversations/conv_big/messages?page[size]=many", wantStatus: 400, wantCode: "invalid_request"},
-			{name: "emptyPageSize", path: "/v1/conversations/conv_big/messages?page[size]=", wantStatus: 400, wantCode: "invalid_request"},
-			{name: "pageSizeNegative", path: "/v1/conversations/conv_big/messages?page[size]=-5", wantStatus: 400, wantCode: "invalid_request"},
-			{name: "pageSizeWithASign", path: "/v1/conversations/conv_big/messages?page[size]=%2B5", wantStatus: 400, wantCode: "invalid_request"},
-			{name: "pageSizeWithLeadingZeros", path: "/v1/conversations/conv_big/messages?page[size]=05", wantStatus: 400, wantCode: "invalid_request"},
-			{name: "pageSizeWithAnEncodedSpace", path: "/v1/conversations/conv_big/messages?page[size]=5%20", wantStatus: 400, wantCode: "invalid_request"},
-			{name: "pageSizeBeyondAnInt64", path: "/v1/conversations/conv_big/messages?page[size]=99999999999999999999", wantStatus: 400, wantCode: "invalid_request"},
-			{name: "badPageSizeBesideABadCursorIsAPageSizeError", path: "/v1/conversations/conv_big/messages?page[size]=0&page[before]=abc", wantStatus: 400, wantCode: "invalid_request"},
-			{name: "goodPageSizeBesideABadCursorIsACursorError", path: "/v1/conversations/conv_big/messages?page[size]=5&page[before]=abc", wantStatus: 400, wantCode: "invalid_cursor"},
-			{name: "goodPageSizeOnAnUnknownConversation", path: "/v1/conversations/conv_nope/messages?page[size]=5", wantStatus: 404, wantCode: "not_found"},
-			{name: "repeatedPageSize", path: "/v1/conversations/conv_big/messages?page[size]=5&page[size]=6", wantStatus: 400, wantCode: "invalid_request"},
-			{name: "repeatedCursor", path: "/v1/conversations/conv_big/messages?page[before]=100&page[before]=101", wantStatus: 400, wantCode: "invalid_request"},
-			{name: "cursorWithASign", path: "/v1/conversations/conv_big/messages?page[after]=%2B100", wantStatus: 400, wantCode: "invalid_cursor"},
-			{name: "unknownRoute", path: "/v1/other", wantStatus: 404, wantCode: "not_found"},
+			{name: "bothCursors", path: "/v1/conversations/conv_big/messages?page[before]=100&page[after]=100", wantStatus: 400, wantType: "invalid-request"},
+			{name: "cursorNotANumber", path: "/v1/conversations/conv_big/messages?page[before]=abc", wantStatus: 400, wantType: "invalid-cursor"},
+			{name: "cursorOfNoMessage", path: "/v1/conversations/conv_big/messages?page[after]=99999", wantStatus: 400, wantType: "invalid-cursor"},
+			{name: "unknownConversation", path: "/v1/conversations/conv_nope/messages", wantStatus: 404, wantType: "conversation-not-found"},
+			{name: "malformedConversationID", path: "/v1/conversations/bad%20id/messages", wantStatus: 400, wantType: "invalid-request"},
+			{name: "missingAccount", path: "/v1/conversations", wantStatus: 400, wantType: "invalid-request"},
+			{name: "emptyCursor", path: "/v1/conversations/conv_big/messages?page[before]=", wantStatus: 400, wantType: "invalid-cursor"},
+			{name: "emptyCursorBesideARealOne", path: "/v1/conversations/conv_big/messages?page[before]=&page[after]=100", wantStatus: 400, wantType: "invalid-request"},
+			{name: "listBothCursors", path: "/v1/conversations?idYapeAccount=acc-list&page[before]=list_1&page[after]=list_2", wantStatus: 400, wantType: "invalid-request"},
+			{name: "listCursorOfAnotherAccount", path: "/v1/conversations?idYapeAccount=acc-list&page[before]=conv_big", wantStatus: 400, wantType: "invalid-cursor"},
+			{name: "listCursorThatDoesNotExist", path: "/v1/conversations?idYapeAccount=acc-list&page[after]=nope", wantStatus: 400, wantType: "invalid-cursor"},
+			{name: "listEmptyCursor", path: "/v1/conversations?idYapeAccount=acc-list&page[before]=", wantStatus: 400, wantType: "invalid-cursor"},
+			{name: "listMalformedCursor", path: "/v1/conversations?idYapeAccount=acc-list&page[before]=a%20b", wantStatus: 400, wantType: "invalid-cursor"},
+			{name: "listPageSizeZero", path: "/v1/conversations?idYapeAccount=acc-list&page[size]=0", wantStatus: 400, wantType: "invalid-request"},
+			{name: "listPageSizeOverTheMaximum", path: "/v1/conversations?idYapeAccount=acc-list&page[size]=101", wantStatus: 400, wantType: "invalid-request"},
+			{name: "listRepeatedCursor", path: "/v1/conversations?idYapeAccount=acc-list&page[before]=list_1&page[before]=list_2", wantStatus: 400, wantType: "invalid-request"},
+			{name: "listBadSizeBesideABadCursorIsASizeError", path: "/v1/conversations?idYapeAccount=acc-list&page[size]=0&page[before]=nope", wantStatus: 400, wantType: "invalid-request"},
+			{name: "pageSizeZero", path: "/v1/conversations/conv_big/messages?page[size]=0", wantStatus: 400, wantType: "invalid-request"},
+			{name: "pageSizeOverTheMaximum", path: "/v1/conversations/conv_big/messages?page[size]=101", wantStatus: 400, wantType: "invalid-request"},
+			{name: "pageSizeNotANumber", path: "/v1/conversations/conv_big/messages?page[size]=many", wantStatus: 400, wantType: "invalid-request"},
+			{name: "emptyPageSize", path: "/v1/conversations/conv_big/messages?page[size]=", wantStatus: 400, wantType: "invalid-request"},
+			{name: "pageSizeNegative", path: "/v1/conversations/conv_big/messages?page[size]=-5", wantStatus: 400, wantType: "invalid-request"},
+			{name: "pageSizeWithASign", path: "/v1/conversations/conv_big/messages?page[size]=%2B5", wantStatus: 400, wantType: "invalid-request"},
+			{name: "pageSizeWithLeadingZeros", path: "/v1/conversations/conv_big/messages?page[size]=05", wantStatus: 400, wantType: "invalid-request"},
+			{name: "pageSizeWithAnEncodedSpace", path: "/v1/conversations/conv_big/messages?page[size]=5%20", wantStatus: 400, wantType: "invalid-request"},
+			{name: "pageSizeBeyondAnInt64", path: "/v1/conversations/conv_big/messages?page[size]=99999999999999999999", wantStatus: 400, wantType: "invalid-request"},
+			{name: "badPageSizeBesideABadCursorIsAPageSizeError", path: "/v1/conversations/conv_big/messages?page[size]=0&page[before]=abc", wantStatus: 400, wantType: "invalid-request"},
+			{name: "goodPageSizeBesideABadCursorIsACursorError", path: "/v1/conversations/conv_big/messages?page[size]=5&page[before]=abc", wantStatus: 400, wantType: "invalid-cursor"},
+			{name: "goodPageSizeOnAnUnknownConversation", path: "/v1/conversations/conv_nope/messages?page[size]=5", wantStatus: 404, wantType: "conversation-not-found"},
+			{name: "repeatedPageSize", path: "/v1/conversations/conv_big/messages?page[size]=5&page[size]=6", wantStatus: 400, wantType: "invalid-request"},
+			{name: "repeatedCursor", path: "/v1/conversations/conv_big/messages?page[before]=100&page[before]=101", wantStatus: 400, wantType: "invalid-request"},
+			{name: "cursorWithASign", path: "/v1/conversations/conv_big/messages?page[after]=%2B100", wantStatus: 400, wantType: "invalid-cursor"},
+			{name: "unknownRoute", path: "/v1/other", wantStatus: 404, wantType: "about:blank"},
 		}
 
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
-				status, body := get(tt.path)
+				status, body, header := getWithHeader(tt.path)
 
 				assert.Equal(t, tt.wantStatus, status)
-				var e struct {
-					Error struct{ Code string } `json:"error"`
+				assert.Equal(t, "application/problem+json", header.Get("Content-Type"), "an error is RFC 9457 problem details")
+				var problem struct {
+					Type   string `json:"type"`
+					Title  string `json:"title"`
+					Status int    `json:"status"`
+					Detail string `json:"detail"`
 				}
-				require.NoError(t, json.Unmarshal(body, &e))
-				assert.Equal(t, tt.wantCode, e.Error.Code)
+				require.NoError(t, json.Unmarshal(body, &problem))
+				wantType := "tag:yape.com.pe,2026:conversation-history:" + tt.wantType
+				if tt.wantType == "about:blank" {
+					wantType = tt.wantType
+					assert.Equal(t, http.StatusText(tt.wantStatus), problem.Title, "about:blank is titled with the status phrase")
+				}
+				assert.Equal(t, wantType, problem.Type)
+				assert.Equal(t, tt.wantStatus, problem.Status, "the status in the body is the status of the response")
+				assert.NotEmpty(t, problem.Title)
+				assert.NotEmpty(t, problem.Detail)
+				assert.NotContains(t, string(body), `"error":`, "the old {error:{code}} envelope is gone")
 			})
 		}
 	})

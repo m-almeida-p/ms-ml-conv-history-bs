@@ -34,29 +34,42 @@ func (h *Handler) Register(e *echo.Echo) {
 	v1.GET("/conversations/:conversationId/messages", h.Messages)
 }
 
-// fail answers an error with the status and body its kind calls for.
+// fail answers an error with the status and problem its kind calls for.
 func (h *Handler) fail(c echo.Context, err error) error {
+	return h.failWithCursor(c, err, detailMessagesCursor)
+}
+
+// failWithCursor is fail with the wording of an invalid cursor for what the route pages.
+func (h *Handler) failWithCursor(c echo.Context, err error, cursorDetail string) error {
 	switch {
 	case errors.Is(err, domain.ErrInvalidCursor):
-		return c.JSON(http.StatusBadRequest, errorBody400("invalid_cursor", "page[before] or page[after] is not the _id of a message in this conversation."))
+		return writeProblem(c, http.StatusBadRequest, typeInvalidCursor, "Invalid cursor", cursorDetail)
 	case errors.Is(err, domain.ErrInvalidRequest):
-		// The service words these without the input, so the text is safe to return.
-		return c.JSON(http.StatusBadRequest, errorBody400("invalid_request", err.Error()))
+		return writeProblem(c, http.StatusBadRequest, typeInvalidRequest, "Invalid request", invalidRequestDetail(err))
 	case errors.Is(err, domain.ErrNotFound):
-		return c.JSON(http.StatusNotFound, errorResponse{Error: errorBody{Code: "not_found", Description: "No chat messages were found for this conversation."}})
+		return writeProblem(c, http.StatusNotFound, typeConversationNotFound, "Conversation not found", detailNoMessages)
 	default:
 		h.log.Errorf("%s %s failed: %v", c.Request().Method, c.Path(), err)
 
-		return c.JSON(http.StatusInternalServerError, errorResponse{Error: errorBody{Code: "internal_error", Description: "Something went wrong. Try again."}})
+		return writeBlankProblem(c, http.StatusInternalServerError, detailServerError)
 	}
 }
 
-func errorBody400(code, description string) errorResponse {
-	return errorResponse{Error: errorBody{Code: code, Description: description}}
+// invalidRequestDetail is what to tell the client about an invalid request. An
+// *domain.InvalidRequestError carries words that name no value, found through any context wrapped
+// around it. Any other error that matches ErrInvalidRequest carries none, and its text is not
+// written for the client, so the client gets a fixed sentence.
+func invalidRequestDetail(err error) string {
+	var invalid *domain.InvalidRequestError
+	if errors.As(err, &invalid) {
+		return invalid.Detail
+	}
+
+	return detailInvalidRequest
 }
 
 // ErrorHandler answers the errors Echo raises itself (unknown route, wrong method,
-// panics) in the same body as the handlers.
+// panics) as problem details too, like the handlers.
 func ErrorHandler(log Logger) echo.HTTPErrorHandler {
 	return func(err error, c echo.Context) {
 		if c.Response().Committed {
@@ -69,16 +82,15 @@ func ErrorHandler(log Logger) echo.HTTPErrorHandler {
 			httpErr = echo.NewHTTPError(http.StatusInternalServerError)
 		}
 
-		code, description := "internal_error", "Something went wrong. Try again."
 		switch httpErr.Code {
 		case http.StatusNotFound:
-			code, description = "not_found", "There is nothing at this path."
+			_ = writeBlankProblem(c, httpErr.Code, detailNothingHere)
 		case http.StatusMethodNotAllowed:
-			code, description = "method_not_allowed", "This path does not accept this method."
+			_ = writeBlankProblem(c, httpErr.Code, detailMethodNotAllowed)
 		case http.StatusBadRequest:
-			code, description = "invalid_request", "The request is malformed."
+			_ = writeProblem(c, httpErr.Code, typeInvalidRequest, "Invalid request", detailMalformed)
+		default:
+			_ = writeBlankProblem(c, httpErr.Code, detailServerError)
 		}
-
-		_ = c.JSON(httpErr.Code, errorResponse{Error: errorBody{Code: code, Description: description}})
 	}
 }

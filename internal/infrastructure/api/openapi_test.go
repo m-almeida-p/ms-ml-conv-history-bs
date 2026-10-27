@@ -40,6 +40,30 @@ type spec struct {
 	Definitions map[string]schema         `yaml:"definitions"`
 }
 
+// producesOf returns the media types the spec lists for the operation that serves a GET to
+// target, and false when no documented operation does (an unknown route).
+func producesOf(s spec, target string) ([]string, bool) {
+	path, _, _ := strings.Cut(target, "?")
+	for documented, methods := range s.Paths {
+		if !regexp.MustCompile("^" + braces.ReplaceAllString(documented, "[^/]+") + "$").MatchString(path) {
+			continue
+		}
+		operation, ok := methods["get"].(map[string]any)
+		if !ok {
+			continue
+		}
+		var produces []string
+		raw, _ := operation["produces"].([]any)
+		for _, media := range raw {
+			produces = append(produces, media.(string))
+		}
+
+		return produces, true
+	}
+
+	return nil, false
+}
+
 func loadSpec(t *testing.T) spec {
 	t.Helper()
 
@@ -248,7 +272,7 @@ func TestRepliesConformToTheOpenAPISpec(t *testing.T) {
 			expect: func(h *mocks.History) {
 				h.On("Conversations", mock.Anything, mock.Anything).Return(domain.ConversationList{}, domain.ErrInvalidCursor).Once()
 			},
-			wantStatus: http.StatusBadRequest, definition: "handler.errorResponse",
+			wantStatus: http.StatusBadRequest, definition: "handler.problemResponse",
 		},
 		{
 			name:   "invalidCursor",
@@ -256,7 +280,7 @@ func TestRepliesConformToTheOpenAPISpec(t *testing.T) {
 			expect: func(h *mocks.History) {
 				h.On("Messages", mock.Anything, mock.Anything).Return(domain.MessagePage{}, domain.ErrInvalidCursor).Once()
 			},
-			wantStatus: http.StatusBadRequest, definition: "handler.errorResponse",
+			wantStatus: http.StatusBadRequest, definition: "handler.problemResponse",
 		},
 		{
 			name:   "invalidRequest",
@@ -264,7 +288,7 @@ func TestRepliesConformToTheOpenAPISpec(t *testing.T) {
 			expect: func(h *mocks.History) {
 				h.On("Conversations", mock.Anything, service.ConversationsRequest{}).Return(domain.ConversationList{}, domain.ErrInvalidRequest).Once()
 			},
-			wantStatus: http.StatusBadRequest, definition: "handler.errorResponse",
+			wantStatus: http.StatusBadRequest, definition: "handler.problemResponse",
 		},
 		{
 			name:   "notFound",
@@ -272,7 +296,7 @@ func TestRepliesConformToTheOpenAPISpec(t *testing.T) {
 			expect: func(h *mocks.History) {
 				h.On("Messages", mock.Anything, mock.Anything).Return(domain.MessagePage{}, domain.ErrNotFound).Once()
 			},
-			wantStatus: http.StatusNotFound, definition: "handler.errorResponse",
+			wantStatus: http.StatusNotFound, definition: "handler.problemResponse",
 		},
 		{
 			name:   "serverError",
@@ -280,9 +304,9 @@ func TestRepliesConformToTheOpenAPISpec(t *testing.T) {
 			expect: func(h *mocks.History) {
 				h.On("Messages", mock.Anything, mock.Anything).Return(domain.MessagePage{}, errors.New("boom")).Once()
 			},
-			wantStatus: http.StatusInternalServerError, definition: "handler.errorResponse",
+			wantStatus: http.StatusInternalServerError, definition: "handler.problemResponse",
 		},
-		{name: "unknownRoute", target: "/nothing", expect: func(*mocks.History) {}, wantStatus: http.StatusNotFound, definition: "handler.errorResponse"},
+		{name: "unknownRoute", target: "/nothing", expect: func(*mocks.History) {}, wantStatus: http.StatusNotFound, definition: "handler.problemResponse"},
 		{name: "healthy", target: "/health", expect: func(*mocks.History) {}, wantStatus: http.StatusOK, definition: "api.healthResponse"},
 		{
 			name: "unhealthy", target: "/health", expect: func(*mocks.History) {}, ping: func(context.Context) error { return errors.New("down") },
@@ -303,6 +327,15 @@ func TestRepliesConformToTheOpenAPISpec(t *testing.T) {
 			def, ok := s.Definitions[tt.definition]
 			require.True(t, ok, "the spec has no definition %s", tt.definition)
 			assert.Empty(t, violations(s, def, body, "$"), "the reply does not match the spec")
+
+			// An error is problem details and says so; the spec lists the media type of the reply.
+			mediaType, _, _ := strings.Cut(rec.Header().Get("Content-Type"), ";")
+			if tt.wantStatus >= http.StatusBadRequest && tt.definition == "handler.problemResponse" {
+				assert.Equal(t, "application/problem+json", rec.Header().Get("Content-Type"))
+			}
+			if produces, documented := producesOf(s, tt.target); documented {
+				assert.Contains(t, produces, mediaType, "the spec does not list the media type of the reply")
+			}
 		})
 	}
 }

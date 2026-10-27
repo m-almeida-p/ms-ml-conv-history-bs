@@ -2,7 +2,6 @@ package handler
 
 import (
 	"errors"
-	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -126,9 +125,9 @@ func TestConversations(t *testing.T) {
 			name:       "missingAccountIsABadRequest",
 			target:     "/v1/conversations",
 			wantReq:    service.ConversationsRequest{},
-			err:        fmt.Errorf("%w: idYapeAccount is missing or malformed", domain.ErrInvalidRequest),
+			err:        domain.InvalidRequest("idYapeAccount is missing or malformed"),
 			wantStatus: http.StatusBadRequest,
-			wantJSON:   `{"error":{"code":"invalid_request","description":"invalid request: idYapeAccount is missing or malformed"}}`,
+			wantJSON:   problemJSON(400, "invalid-request", "Invalid request", "idYapeAccount is missing or malformed"),
 		},
 		{
 			name:       "aCursorOfAnotherAccountIsAnInvalidCursorThatDoesNotEchoIt",
@@ -136,23 +135,23 @@ func TestConversations(t *testing.T) {
 			wantReq:    service.ConversationsRequest{IDYapeAccount: "acc-1", Before: ptr("theirs")},
 			err:        domain.ErrInvalidCursor,
 			wantStatus: http.StatusBadRequest,
-			wantJSON:   `{"error":{"code":"invalid_cursor","description":"page[before] or page[after] is not the _id of a conversation of this account."}}`,
+			wantJSON:   problemJSON(400, "invalid-cursor", "Invalid cursor", "page[before] or page[after] is not the _id of a conversation of this account."),
 		},
 		{
 			name:       "bothCursorsAreABadRequest",
 			target:     "/v1/conversations?idYapeAccount=acc-1&page[before]=x&page[after]=y",
 			wantReq:    service.ConversationsRequest{IDYapeAccount: "acc-1", Before: ptr("x"), After: ptr("y")},
-			err:        fmt.Errorf("%w: page[before] and page[after] cannot be used together", domain.ErrInvalidRequest),
+			err:        domain.InvalidRequest("page[before] and page[after] cannot be used together"),
 			wantStatus: http.StatusBadRequest,
-			wantJSON:   `{"error":{"code":"invalid_request","description":"invalid request: page[before] and page[after] cannot be used together"}}`,
+			wantJSON:   problemJSON(400, "invalid-request", "Invalid request", "page[before] and page[after] cannot be used together"),
 		},
 		{
 			name:       "aBadPageSizeIsABadRequest",
 			target:     "/v1/conversations?idYapeAccount=acc-1&page[size]=101",
 			wantReq:    service.ConversationsRequest{IDYapeAccount: "acc-1", Size: ptr("101")},
-			err:        fmt.Errorf("%w: page[size] must be a whole number from 1 to 100", domain.ErrInvalidRequest),
+			err:        domain.InvalidRequest("page[size] must be a whole number from 1 to 100"),
 			wantStatus: http.StatusBadRequest,
-			wantJSON:   `{"error":{"code":"invalid_request","description":"invalid request: page[size] must be a whole number from 1 to 100"}}`,
+			wantJSON:   problemJSON(400, "invalid-request", "Invalid request", "page[size] must be a whole number from 1 to 100"),
 		},
 		{
 			name:       "storeErrorIsAGenericServerError",
@@ -160,7 +159,7 @@ func TestConversations(t *testing.T) {
 			wantReq:    service.ConversationsRequest{IDYapeAccount: "acc-1"},
 			err:        errors.New("connection reset"),
 			wantStatus: http.StatusInternalServerError,
-			wantJSON:   `{"error":{"code":"internal_error","description":"Something went wrong. Try again."}}`,
+			wantJSON:   problemJSON(500, "", "Internal Server Error", "Something went wrong. Try again."),
 			wantLogged: true,
 		},
 	}
@@ -249,7 +248,7 @@ func TestRepeatedParametersOfTheConversationListAreRefused(t *testing.T) {
 			rec := serve(t, history, &recordingLog{}, tt.target)
 
 			assert.Equal(t, http.StatusBadRequest, rec.Code)
-			assert.Contains(t, rec.Body.String(), `"code":"invalid_request"`)
+			assert.Contains(t, rec.Body.String(), `"type":"`+problemTypeBase+`invalid-request"`)
 			assert.Contains(t, rec.Body.String(), tt.want)
 		})
 	}
@@ -258,7 +257,7 @@ func TestRepeatedParametersOfTheConversationListAreRefused(t *testing.T) {
 func TestAnEmptyConversationCursorOrSizeReachesTheServiceSoItIsRefused(t *testing.T) {
 	history := mocks.NewHistory(t)
 	history.On("Conversations", mock.Anything, service.ConversationsRequest{IDYapeAccount: "a", Before: ptr(""), Size: ptr("")}).
-		Return(domain.ConversationList{}, fmt.Errorf("%w: page[size] must be a whole number from 1 to 100", domain.ErrInvalidRequest)).Once()
+		Return(domain.ConversationList{}, domain.InvalidRequest("page[size] must be a whole number from 1 to 100")).Once()
 
 	rec := serve(t, history, &recordingLog{}, "/v1/conversations?idYapeAccount=a&page[before]=&page[size]=")
 

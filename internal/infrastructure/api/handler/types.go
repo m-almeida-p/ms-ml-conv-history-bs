@@ -64,15 +64,19 @@ type conversationResponse struct {
 	LastReceived  float64 `json:"lastReceived" example:"1792505543.5"`
 }
 
-// errorResponse is the body of every error.
-type errorResponse struct {
-	Error errorBody `json:"error"`
-}
-
-type errorBody struct {
-	// Code is one of invalid_request, invalid_cursor, not_found, method_not_allowed, internal_error.
-	Code        string `json:"code" enums:"invalid_request,invalid_cursor,not_found,method_not_allowed,internal_error" example:"invalid_cursor"`
-	Description string `json:"description" example:"page[before] or page[after] is not the _id of a message in this conversation."`
+// problemResponse is the body of every error: RFC 9457 problem details, served as
+// application/problem+json. Clients tell problems apart by Type.
+type problemResponse struct {
+	// Type identifies the kind of problem. One of the service's tag URIs (invalid-request,
+	// invalid-cursor, conversation-not-found, under tag:yape.com.pe,2026:conversation-history:), or
+	// about:blank when the problem means nothing beyond its HTTP status.
+	Type string `json:"type" example:"tag:yape.com.pe,2026:conversation-history:invalid-cursor"`
+	// Title is a short summary of the type; for about:blank it is the HTTP status phrase.
+	Title string `json:"title" example:"Invalid cursor"`
+	// Status repeats the HTTP status code of the response.
+	Status int `json:"status" example:"400"`
+	// Detail explains this occurrence without repeating what the client sent. Do not parse it.
+	Detail string `json:"detail" example:"page[before] or page[after] is not the _id of a message in this conversation."`
 }
 
 // unixSeconds renders a time as Smooch writes `received`: Unix seconds, with

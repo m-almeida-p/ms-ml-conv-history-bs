@@ -126,9 +126,9 @@ func TestMessages(t *testing.T) {
 			name:       "aBadPageSizeIsABadRequest",
 			target:     "/v1/conversations/conv_v1_a/messages?page[size]=101",
 			wantReq:    service.MessagesRequest{ConversationID: "conv_v1_a", Size: ptr("101")},
-			err:        fmt.Errorf("%w: page[size] must be a whole number from 1 to 100", domain.ErrInvalidRequest),
+			err:        domain.InvalidRequest("page[size] must be a whole number from 1 to 100"),
 			wantStatus: http.StatusBadRequest,
-			wantJSON:   `{"error":{"code":"invalid_request","description":"invalid request: page[size] must be a whole number from 1 to 100"}}`,
+			wantJSON:   problemJSON(400, "invalid-request", "Invalid request", "page[size] must be a whole number from 1 to 100"),
 		},
 		{
 			name:       "anEmptyCursorIsPassedOnSoItIsRejectedAsACursor",
@@ -136,31 +136,31 @@ func TestMessages(t *testing.T) {
 			wantReq:    service.MessagesRequest{ConversationID: "conv_v1_a", Before: ptr("")},
 			err:        fmt.Errorf("%w: the cursor is not a message _id", domain.ErrInvalidCursor),
 			wantStatus: http.StatusBadRequest,
-			wantJSON:   `{"error":{"code":"invalid_cursor","description":"page[before] or page[after] is not the _id of a message in this conversation."}}`,
+			wantJSON:   problemJSON(400, "invalid-cursor", "Invalid cursor", "page[before] or page[after] is not the _id of a message in this conversation."),
 		},
 		{
 			name:       "anEmptyCursorBesideARealOneReachesTheBothCursorsRule",
 			target:     "/v1/conversations/conv_v1_a/messages?page[before]=&page[after]=7",
 			wantReq:    service.MessagesRequest{ConversationID: "conv_v1_a", Before: ptr(""), After: ptr("7")},
-			err:        fmt.Errorf("%w: page[before] and page[after] cannot be used together", domain.ErrInvalidRequest),
+			err:        domain.InvalidRequest("page[before] and page[after] cannot be used together"),
 			wantStatus: http.StatusBadRequest,
-			wantJSON:   `{"error":{"code":"invalid_request","description":"invalid request: page[before] and page[after] cannot be used together"}}`,
+			wantJSON:   problemJSON(400, "invalid-request", "Invalid request", "page[before] and page[after] cannot be used together"),
 		},
 		{
 			name:       "bothCursorsAreABadRequest",
 			target:     "/v1/conversations/conv_v1_a/messages?page[before]=1&page[after]=2",
 			wantReq:    service.MessagesRequest{ConversationID: "conv_v1_a", Before: ptr("1"), After: ptr("2")},
-			err:        fmt.Errorf("%w: page[before] and page[after] cannot be used together", domain.ErrInvalidRequest),
+			err:        domain.InvalidRequest("page[before] and page[after] cannot be used together"),
 			wantStatus: http.StatusBadRequest,
-			wantJSON:   `{"error":{"code":"invalid_request","description":"invalid request: page[before] and page[after] cannot be used together"}}`,
+			wantJSON:   problemJSON(400, "invalid-request", "Invalid request", "page[before] and page[after] cannot be used together"),
 		},
 		{
 			name:       "malformedConversationIDIsABadRequest",
 			target:     "/v1/conversations/bad%20id/messages",
 			wantReq:    service.MessagesRequest{ConversationID: "bad id"},
-			err:        fmt.Errorf("%w: the conversation id is malformed", domain.ErrInvalidRequest),
+			err:        domain.InvalidRequest("the conversation id is malformed"),
 			wantStatus: http.StatusBadRequest,
-			wantJSON:   `{"error":{"code":"invalid_request","description":"invalid request: the conversation id is malformed"}}`,
+			wantJSON:   problemJSON(400, "invalid-request", "Invalid request", "the conversation id is malformed"),
 		},
 		{
 			name:       "badCursorIsABadRequestThatDoesNotEchoIt",
@@ -168,7 +168,7 @@ func TestMessages(t *testing.T) {
 			wantReq:    service.MessagesRequest{ConversationID: "conv_v1_a", Before: ptr("nope")},
 			err:        fmt.Errorf("%w: the cursor is not a message _id", domain.ErrInvalidCursor),
 			wantStatus: http.StatusBadRequest,
-			wantJSON:   `{"error":{"code":"invalid_cursor","description":"page[before] or page[after] is not the _id of a message in this conversation."}}`,
+			wantJSON:   problemJSON(400, "invalid-cursor", "Invalid cursor", "page[before] or page[after] is not the _id of a message in this conversation."),
 		},
 		{
 			name:       "unknownConversationIsNotFound",
@@ -176,7 +176,7 @@ func TestMessages(t *testing.T) {
 			wantReq:    service.MessagesRequest{ConversationID: "conv_v1_zzz"},
 			err:        domain.ErrNotFound,
 			wantStatus: http.StatusNotFound,
-			wantJSON:   `{"error":{"code":"not_found","description":"No chat messages were found for this conversation."}}`,
+			wantJSON:   problemJSON(404, "conversation-not-found", "Conversation not found", "No chat messages were found for this conversation."),
 		},
 		{
 			name:       "storeErrorIsAGenericServerErrorThatIsLogged",
@@ -184,7 +184,7 @@ func TestMessages(t *testing.T) {
 			wantReq:    service.MessagesRequest{ConversationID: "conv_v1_a"},
 			err:        storeDown,
 			wantStatus: http.StatusInternalServerError,
-			wantJSON:   `{"error":{"code":"internal_error","description":"Something went wrong. Try again."}}`,
+			wantJSON:   problemJSON(500, "", "Internal Server Error", "Something went wrong. Try again."),
 			wantLogged: true,
 		},
 	}
@@ -198,7 +198,7 @@ func TestMessages(t *testing.T) {
 			rec := serve(t, history, log, tt.target)
 
 			assert.Equal(t, tt.wantStatus, rec.Code)
-			assert.Contains(t, rec.Header().Get("Content-Type"), "application/json")
+			assert.Equal(t, wantContentType(tt.wantStatus), contentType(rec))
 			assert.JSONEq(t, tt.wantJSON, rec.Body.String())
 			assert.Equal(t, tt.wantLink, rec.Header().Get("Link"))
 			assert.NotContains(t, rec.Body.String(), `"meta"`, "paging lives in the Link header, not the body")
@@ -243,7 +243,7 @@ func TestRepeatedParametersAreAmbiguousAndRefused(t *testing.T) {
 			rec := serve(t, history, &recordingLog{}, tt.target)
 
 			assert.Equal(t, http.StatusBadRequest, rec.Code)
-			assert.Contains(t, rec.Body.String(), `"code":"invalid_request"`)
+			assert.Contains(t, rec.Body.String(), `"type":"`+problemTypeBase+`invalid-request"`)
 			assert.Contains(t, rec.Body.String(), tt.want)
 		})
 	}
@@ -262,12 +262,12 @@ func TestUnknownParametersAreIgnored(t *testing.T) {
 func TestAnEmptyPageSizeReachesTheServiceSoItIsRefused(t *testing.T) {
 	history := mocks.NewHistory(t)
 	history.On("Messages", mock.Anything, service.MessagesRequest{ConversationID: "conv_v1_a", Size: ptr("")}).
-		Return(domain.MessagePage{}, fmt.Errorf("%w: page[size] must be a whole number from 1 to 100", domain.ErrInvalidRequest)).Once()
+		Return(domain.MessagePage{}, domain.InvalidRequest("page[size] must be a whole number from 1 to 100")).Once()
 
 	rec := serve(t, history, &recordingLog{}, "/v1/conversations/conv_v1_a/messages?page[size]=")
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
-	assert.Contains(t, rec.Body.String(), `"code":"invalid_request"`)
+	assert.Contains(t, rec.Body.String(), `"type":"`+problemTypeBase+`invalid-request"`)
 }
 
 func TestTheLinkKeepsEveryCharacterAConversationIDMayHold(t *testing.T) {

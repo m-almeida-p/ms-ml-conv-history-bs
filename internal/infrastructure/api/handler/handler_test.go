@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -53,11 +54,11 @@ func TestErrorHandler(t *testing.T) {
 	}{
 		{
 			name: "unknownRoute", method: http.MethodGet, target: "/v1/nothing", wantStatus: http.StatusNotFound,
-			wantJSON: `{"error":{"code":"not_found","description":"There is nothing at this path."}}`,
+			wantJSON: problemJSON(404, "", "Not Found", "There is nothing at this path."),
 		},
 		{
 			name: "wrongMethod", method: http.MethodPost, target: "/v1/conversations", wantStatus: http.StatusMethodNotAllowed,
-			wantJSON: `{"error":{"code":"method_not_allowed","description":"This path does not accept this method."}}`,
+			wantJSON: problemJSON(405, "", "Method Not Allowed", "This path does not accept this method."),
 		},
 	}
 
@@ -71,6 +72,7 @@ func TestErrorHandler(t *testing.T) {
 			e.ServeHTTP(rec, httptest.NewRequest(tt.method, tt.target, nil))
 
 			assert.Equal(t, tt.wantStatus, rec.Code)
+			assert.Equal(t, problemContentType, contentType(rec))
 			assert.JSONEq(t, tt.wantJSON, rec.Body.String())
 		})
 	}
@@ -81,12 +83,15 @@ func TestErrorHandlerForOtherErrors(t *testing.T) {
 		name       string
 		err        error
 		wantStatus int
-		wantCode   string
+		wantJSON   string
 		wantLogged bool
 	}{
-		{name: "badRequestFromEcho", err: echo.NewHTTPError(http.StatusBadRequest), wantStatus: http.StatusBadRequest, wantCode: "invalid_request"},
-		{name: "otherHTTPError", err: echo.NewHTTPError(http.StatusTeapot), wantStatus: http.StatusTeapot, wantCode: "internal_error"},
-		{name: "plainError", err: fmt.Errorf("boom"), wantStatus: http.StatusInternalServerError, wantCode: "internal_error", wantLogged: true},
+		{name: "badRequestFromEcho", err: echo.NewHTTPError(http.StatusBadRequest), wantStatus: http.StatusBadRequest,
+			wantJSON: problemJSON(400, "invalid-request", "Invalid request", "The request is malformed.")},
+		{name: "otherHTTPErrorUsesItsStatusPhrase", err: echo.NewHTTPError(http.StatusTeapot), wantStatus: http.StatusTeapot,
+			wantJSON: problemJSON(418, "", "I'm a teapot", "Something went wrong. Try again.")},
+		{name: "plainError", err: fmt.Errorf("boom"), wantStatus: http.StatusInternalServerError,
+			wantJSON: problemJSON(500, "", "Internal Server Error", "Something went wrong. Try again."), wantLogged: true},
 	}
 
 	for _, tt := range tests {
@@ -99,7 +104,8 @@ func TestErrorHandlerForOtherErrors(t *testing.T) {
 			ErrorHandler(log)(tt.err, c)
 
 			assert.Equal(t, tt.wantStatus, rec.Code)
-			assert.Contains(t, rec.Body.String(), `"code":"`+tt.wantCode+`"`)
+			assert.Equal(t, problemContentType, contentType(rec))
+			assert.JSONEq(t, tt.wantJSON, rec.Body.String())
 			assert.Equal(t, tt.wantLogged, strings.Contains(log.text(), "boom"))
 		})
 	}
@@ -115,4 +121,33 @@ func TestErrorHandlerSkipsAnAnsweredRequest(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "already answered", rec.Body.String())
+}
+
+// problemJSON is the body of a problem details reply. typeName is the short name of one of the
+// service's problem types, or "" for about:blank.
+func problemJSON(status int, typeName, title, detail string) string {
+	problemType := typeBlank
+	if typeName != "" {
+		problemType = problemTypeBase + typeName
+	}
+	body, err := json.Marshal(map[string]any{"type": problemType, "title": title, "status": status, "detail": detail})
+	if err != nil {
+		panic(err)
+	}
+
+	return string(body)
+}
+
+// contentType is the exact media type of a reply.
+func contentType(rec *httptest.ResponseRecorder) string {
+	return rec.Header().Get("Content-Type")
+}
+
+// wantContentType is the media type a reply with this status has: problem details for an error.
+func wantContentType(status int) string {
+	if status >= http.StatusBadRequest {
+		return problemContentType
+	}
+
+	return "application/json"
 }

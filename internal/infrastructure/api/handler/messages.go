@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"fmt"
 	"net/http"
 
 	"github.com/labstack/echo/v4"
@@ -22,11 +21,12 @@ import (
 // @Param page[after] query string false "Message _id: read the page of messages newer than it"
 // @Param page[size] query int false "How many messages the page holds, from 1 to 100 (default 100); the Link header repeats it when it is not the default" minimum(1) maximum(100) default(100)
 // @Produce json
+// @Produce application/problem+json
 // @Success 200 {object} messagesResponse
 // @Header 200 {string} Link "Only when more messages exist in the direction read: rel=prev (older messages) on newest and before pages, rel=next (newer messages) on after pages. The target is this route with page[before] or page[after] set to the _id of the first or last message, and page[size] repeated when it is not 100."
-// @Failure 400 {object} errorResponse "invalid_request (malformed id, both cursors, a parameter sent twice, a page[size] outside 1 to 100) or invalid_cursor (empty, not a plain decimal _id, or not a message of this conversation)"
-// @Failure 404 {object} errorResponse "not_found: the conversation has no chat messages"
-// @Failure 500 {object} errorResponse "internal_error"
+// @Failure 400 {object} problemResponse "Problem details (RFC 9457). Type invalid-request: malformed id, both cursors, a parameter sent twice, a page[size] outside 1 to 100. Type invalid-cursor: empty, not a plain decimal _id, or not a message of this conversation"
+// @Failure 404 {object} problemResponse "Problem details (RFC 9457), type conversation-not-found: the conversation has no chat messages"
+// @Failure 500 {object} problemResponse "Problem details (RFC 9457), type about:blank"
 // @Router /v1/conversations/{conversationId}/messages [get]
 func (h *Handler) Messages(c echo.Context) error {
 	before, err := queryOnce(c, "page[before]")
@@ -109,7 +109,7 @@ func queryOnce(c echo.Context, key string) (*string, error) {
 		return nil, nil
 	}
 	if len(values) > 1 {
-		return nil, fmt.Errorf("%w: %s is given more than once", domain.ErrInvalidRequest, key)
+		return nil, domain.InvalidRequest("%s is given more than once", key)
 	}
 
 	return &values[0], nil

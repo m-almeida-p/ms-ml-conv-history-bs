@@ -28,7 +28,7 @@ func NewService(messages repository.MessageRepository) *Service {
 // Messages implements service.History.
 func (s *Service) Messages(ctx context.Context, req service.MessagesRequest) (domain.MessagePage, error) {
 	if !domain.ValidIdentifier(req.ConversationID) {
-		return domain.MessagePage{}, fmt.Errorf("%w: the conversation id is malformed", domain.ErrInvalidRequest)
+		return domain.MessagePage{}, domain.InvalidRequest("the conversation id is malformed")
 	}
 
 	size, err := parsePageSize(req.Size, domain.PageSize)
@@ -40,7 +40,7 @@ func (s *Service) Messages(ctx context.Context, req service.MessagesRequest) (do
 
 	switch {
 	case req.Before != nil && req.After != nil:
-		return domain.MessagePage{}, fmt.Errorf("%w: page[before] and page[after] cannot be used together", domain.ErrInvalidRequest)
+		return domain.MessagePage{}, domain.InvalidRequest("page[before] and page[after] cannot be used together")
 	case req.Before != nil:
 		query.Direction = domain.DirectionBefore
 		id, err := parseCursor(*req.Before)
@@ -80,7 +80,7 @@ func (s *Service) Messages(ctx context.Context, req service.MessagesRequest) (do
 // Conversations implements service.History.
 func (s *Service) Conversations(ctx context.Context, req service.ConversationsRequest) (domain.ConversationList, error) {
 	if !domain.ValidIdentifier(req.IDYapeAccount) {
-		return domain.ConversationList{}, fmt.Errorf("%w: idYapeAccount is missing or malformed", domain.ErrInvalidRequest)
+		return domain.ConversationList{}, domain.InvalidRequest("idYapeAccount is missing or malformed")
 	}
 
 	size, err := parsePageSize(req.Size, domain.ConversationListSize)
@@ -92,7 +92,7 @@ func (s *Service) Conversations(ctx context.Context, req service.ConversationsRe
 
 	switch {
 	case req.Before != nil && req.After != nil:
-		return domain.ConversationList{}, fmt.Errorf("%w: page[before] and page[after] cannot be used together", domain.ErrInvalidRequest)
+		return domain.ConversationList{}, domain.InvalidRequest("page[before] and page[after] cannot be used together")
 	case req.Before != nil:
 		query.Direction = domain.DirectionBefore
 		query.CursorID = *req.Before
@@ -127,7 +127,7 @@ func parsePageSize(raw *string, limit int) (int, error) {
 	}
 	size, err := strconv.ParseInt(*raw, 10, 32)
 	if err != nil || size < 1 || size > int64(limit) || strconv.FormatInt(size, 10) != *raw {
-		return 0, fmt.Errorf("%w: page[size] must be a whole number from 1 to %d", domain.ErrInvalidRequest, limit)
+		return 0, domain.InvalidRequest("page[size] must be a whole number from 1 to %d", limit)
 	}
 
 	return int(size), nil

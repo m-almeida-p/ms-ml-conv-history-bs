@@ -152,9 +152,33 @@ var (
 	ErrNotFound = errors.New("not found")
 	// ErrInvalidCursor means the cursor is not the _id of a message of that conversation.
 	ErrInvalidCursor = errors.New("invalid cursor")
-	// ErrInvalidRequest means the request is malformed, such as two cursors at once.
+	// ErrInvalidRequest means the request is malformed, such as two cursors at once. A reader
+	// that wants the words for the client takes them from an *InvalidRequestError.
 	ErrInvalidRequest = errors.New("invalid request")
 )
+
+// InvalidRequestError is an ErrInvalidRequest that carries what is wrong, worded for the
+// client and without the value that was wrong, so it is safe to show. errors.Is(err,
+// ErrInvalidRequest) holds for it, and errors.As finds it through any context wrapped around it.
+type InvalidRequestError struct {
+	// Detail says what is wrong with the request, never with which value.
+	Detail string
+}
+
+// InvalidRequest returns an InvalidRequestError whose detail is the formatted text.
+func InvalidRequest(format string, args ...any) error {
+	return &InvalidRequestError{Detail: fmt.Sprintf(format, args...)}
+}
+
+// Error implements error.
+func (e *InvalidRequestError) Error() string {
+	return ErrInvalidRequest.Error() + ": " + e.Detail
+}
+
+// Is makes an InvalidRequestError match ErrInvalidRequest.
+func (e *InvalidRequestError) Is(target error) bool {
+	return target == ErrInvalidRequest
+}
 
 // PageQuery asks for one page of a conversation. CursorSequence is the sequence
 // of a message of that conversation, and is ignored for DirectionNewest. Size is

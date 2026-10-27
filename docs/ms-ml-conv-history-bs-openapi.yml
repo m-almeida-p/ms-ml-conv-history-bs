@@ -40,28 +40,6 @@ definitions:
           $ref: '#/definitions/handler.conversationResponse'
         type: array
     type: object
-  handler.errorBody:
-    properties:
-      code:
-        description: Code is one of invalid_request, invalid_cursor, not_found, method_not_allowed,
-          internal_error.
-        enum:
-        - invalid_request
-        - invalid_cursor
-        - not_found
-        - method_not_allowed
-        - internal_error
-        example: invalid_cursor
-        type: string
-      description:
-        example: page[before] or page[after] is not the _id of a message in this conversation.
-        type: string
-    type: object
-  handler.errorResponse:
-    properties:
-      error:
-        $ref: '#/definitions/handler.errorBody'
-    type: object
   handler.messageMetadata:
     properties:
       eventName:
@@ -136,6 +114,30 @@ definitions:
           $ref: '#/definitions/handler.messageResponse'
         type: array
     type: object
+  handler.problemResponse:
+    properties:
+      detail:
+        description: Detail explains this occurrence without repeating what the client
+          sent. Do not parse it.
+        example: page[before] or page[after] is not the _id of a message in this conversation.
+        type: string
+      status:
+        description: Status repeats the HTTP status code of the response.
+        example: 400
+        type: integer
+      title:
+        description: Title is a short summary of the type; for about:blank it is the
+          HTTP status phrase.
+        example: Invalid cursor
+        type: string
+      type:
+        description: |-
+          Type identifies the kind of problem. One of the service's tag URIs (invalid-request,
+          invalid-cursor, conversation-not-found, under tag:yape.com.pe,2026:conversation-history:), or
+          about:blank when the problem means nothing beyond its HTTP status.
+        example: tag:yape.com.pe,2026:conversation-history:invalid-cursor
+        type: string
+    type: object
   handler.sourceResponse:
     properties:
       type:
@@ -208,6 +210,7 @@ paths:
         type: integer
       produces:
       - application/json
+      - application/problem+json
       responses:
         "200":
           description: OK
@@ -222,15 +225,16 @@ paths:
           schema:
             $ref: '#/definitions/handler.conversationsResponse'
         "400":
-          description: invalid_request (account missing or malformed, both cursors,
-            a parameter sent twice, a page[size] outside 1 to 100) or invalid_cursor
-            (empty, malformed, or not a conversation of this account)
+          description: 'Problem details (RFC 9457). Type invalid-request: account
+            missing or malformed, both cursors, a parameter sent twice, a page[size]
+            outside 1 to 100. Type invalid-cursor: empty, malformed, or not a conversation
+            of this account'
           schema:
-            $ref: '#/definitions/handler.errorResponse'
+            $ref: '#/definitions/handler.problemResponse'
         "500":
-          description: internal_error
+          description: Problem details (RFC 9457), type about:blank
           schema:
-            $ref: '#/definitions/handler.errorResponse'
+            $ref: '#/definitions/handler.problemResponse'
       summary: List the conversations of an account
       tags:
       - Conversations
@@ -269,6 +273,7 @@ paths:
         type: integer
       produces:
       - application/json
+      - application/problem+json
       responses:
         "200":
           description: OK
@@ -283,19 +288,21 @@ paths:
           schema:
             $ref: '#/definitions/handler.messagesResponse'
         "400":
-          description: invalid_request (malformed id, both cursors, a parameter sent
-            twice, a page[size] outside 1 to 100) or invalid_cursor (empty, not a
-            plain decimal _id, or not a message of this conversation)
+          description: 'Problem details (RFC 9457). Type invalid-request: malformed
+            id, both cursors, a parameter sent twice, a page[size] outside 1 to 100.
+            Type invalid-cursor: empty, not a plain decimal _id, or not a message
+            of this conversation'
           schema:
-            $ref: '#/definitions/handler.errorResponse'
+            $ref: '#/definitions/handler.problemResponse'
         "404":
-          description: 'not_found: the conversation has no chat messages'
+          description: 'Problem details (RFC 9457), type conversation-not-found: the
+            conversation has no chat messages'
           schema:
-            $ref: '#/definitions/handler.errorResponse'
+            $ref: '#/definitions/handler.problemResponse'
         "500":
-          description: internal_error
+          description: Problem details (RFC 9457), type about:blank
           schema:
-            $ref: '#/definitions/handler.errorResponse'
+            $ref: '#/definitions/handler.problemResponse'
       summary: List the messages of a conversation
       tags:
       - Messages

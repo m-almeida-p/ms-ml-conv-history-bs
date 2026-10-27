@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"errors"
 	"net/http"
 	"strconv"
 
@@ -24,10 +23,11 @@ import (
 // @Param page[after] query string false "Conversation _id: read the page of conversations more recent than it"
 // @Param page[size] query int false "How many conversations the page holds, from 1 to 100 (default 100); the Link header repeats it when it is not the default" minimum(1) maximum(100) default(100)
 // @Produce json
+// @Produce application/problem+json
 // @Success 200 {object} conversationsResponse
 // @Header 200 {string} Link "Only when more conversations exist in the direction read: rel=prev (older) on most recent and before pages, rel=next (more recent) on after pages. The target is this route with idYapeAccount and page[before] or page[after] set to the _id of the oldest or most recent conversation of the page, and page[size] repeated when it is not 100."
-// @Failure 400 {object} errorResponse "invalid_request (account missing or malformed, both cursors, a parameter sent twice, a page[size] outside 1 to 100) or invalid_cursor (empty, malformed, or not a conversation of this account)"
-// @Failure 500 {object} errorResponse "internal_error"
+// @Failure 400 {object} problemResponse "Problem details (RFC 9457). Type invalid-request: account missing or malformed, both cursors, a parameter sent twice, a page[size] outside 1 to 100. Type invalid-cursor: empty, malformed, or not a conversation of this account"
+// @Failure 500 {object} problemResponse "Problem details (RFC 9457), type about:blank"
 // @Router /v1/conversations [get]
 func (h *Handler) Conversations(c echo.Context) error {
 	account, err := queryOnce(c, "idYapeAccount")
@@ -59,7 +59,7 @@ func (h *Handler) Conversations(c echo.Context) error {
 		Size:          size,
 	})
 	if err != nil {
-		return h.failConversations(c, err)
+		return h.failWithCursor(c, err, detailConversationsCursor)
 	}
 
 	if link := conversationsContinuation(idYapeAccount, list); link != "" {
@@ -67,15 +67,6 @@ func (h *Handler) Conversations(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, toConversationsResponse(list))
-}
-
-// failConversations words an invalid cursor for conversations and leaves every other error to fail.
-func (h *Handler) failConversations(c echo.Context, err error) error {
-	if errors.Is(err, domain.ErrInvalidCursor) {
-		return c.JSON(http.StatusBadRequest, errorBody400("invalid_cursor", "page[before] or page[after] is not the _id of a conversation of this account."))
-	}
-
-	return h.fail(c, err)
 }
 
 // conversationsContinuation is the Link header that continues the page in the direction it

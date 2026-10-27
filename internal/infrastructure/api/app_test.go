@@ -141,7 +141,7 @@ func TestPanicIsAnsweredAndLogged(t *testing.T) {
 	rec := get(e, "/boom")
 
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
-	assert.Contains(t, rec.Body.String(), `"code":"internal_error"`)
+	assert.Contains(t, rec.Body.String(), `"title":"Internal Server Error"`)
 	assert.NotContains(t, rec.Body.String(), "something broke")
 	assert.Contains(t, log.text(), "error GET /boom failed: something broke")
 	assert.Contains(t, log.text(), "info GET /boom 500")

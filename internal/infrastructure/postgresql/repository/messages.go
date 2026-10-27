@@ -4,7 +4,6 @@ import (
 	"context"
 	_ "embed"
 	"errors"
-	"fmt"
 	"slices"
 	"time"
 
@@ -52,7 +51,7 @@ func NewPostgresMessageRepository(db postgresql.DB) *PostgresMessageRepository {
 // than a page, which tells whether more exist without a second query.
 func (r *PostgresMessageRepository) ListMessages(ctx context.Context, q domain.PageQuery) (domain.Page, error) {
 	if q.Size < 1 || q.Size > domain.PageSize {
-		return domain.Page{}, fmt.Errorf("%w: the page size must be from 1 to %d", domain.ErrInvalidRequest, domain.PageSize)
+		return domain.Page{}, domain.InvalidRequest("the page size must be from 1 to %d", domain.PageSize)
 	}
 
 	query, args, err := r.pageQuery(ctx, q)
@@ -109,7 +108,7 @@ func (r *PostgresMessageRepository) pageQuery(ctx context.Context, q domain.Page
 		return query, []any{q.ConversationID, q.CursorSequence, limit}, nil
 	}
 
-	return "", nil, fmt.Errorf("%w: unknown direction %q", domain.ErrInvalidRequest, q.Direction)
+	return "", nil, domain.InvalidRequest("unknown direction %q", q.Direction)
 }
 
 // checkCursor confirms that the cursor is a message of the conversation. One that
@@ -167,7 +166,7 @@ func scanMessages(rows pgx.Rows) ([]domain.Message, error) {
 // conversation id as the tie-break, so the pages never overlap.
 func (r *PostgresMessageRepository) ListConversations(ctx context.Context, q domain.ConversationQuery) (domain.ConversationList, error) {
 	if q.Size < 1 || q.Size > domain.ConversationListSize {
-		return domain.ConversationList{}, fmt.Errorf("%w: the page size must be from 1 to %d", domain.ErrInvalidRequest, domain.ConversationListSize)
+		return domain.ConversationList{}, domain.InvalidRequest("the page size must be from 1 to %d", domain.ConversationListSize)
 	}
 
 	query, args, err := r.conversationsQuery(ctx, q)
@@ -230,5 +229,5 @@ func (r *PostgresMessageRepository) conversationsQuery(ctx context.Context, q do
 		return query, []any{q.IDYapeAccount, lastOccurredAt, q.CursorID, limit}, nil
 	}
 
-	return "", nil, fmt.Errorf("%w: unknown direction %q", domain.ErrInvalidRequest, q.Direction)
+	return "", nil, domain.InvalidRequest("unknown direction %q", q.Direction)
 }
