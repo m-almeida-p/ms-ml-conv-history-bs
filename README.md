@@ -5,7 +5,7 @@ Kafka (published by Debezium), keeps every one in an inbox, projects the chat be
 user and the assistant into a history table, and serves that history over a small HTTP API
 shaped after the Smooch message.
 
-PoC for AIP-472. The API has no authentication, so this service must not be deployed.
+PoC for AIP-472. The API and the MCP server have no authentication, so this service must not be deployed.
 
 ```mermaid
 flowchart LR
@@ -18,12 +18,16 @@ flowchart LR
     M --> H["cmd/api :3100"]
     S --> H
     H --> U["Client"]
+    I --> G["cmd/mcp :3200"]
+    S --> G
+    G --> AG["Agent<br/>(MCP client)"]
 ```
 
 | Binary | Role | Port |
 |--------|------|------|
 | `cmd/consumer` | Kafka -> inbox -> chat messages. `consumer rebuild` recreates the messages from the inbox | none |
 | `cmd/api` | Reads the history | `3100` |
+| `cmd/mcp` | Serves the history and statistics about it to an agent as MCP tools | `3200` |
 
 ## Run
 
@@ -33,6 +37,7 @@ Both binaries read `config.yaml` from the working directory, so start them from 
 make migrations/up        # create the tables (the testing repo owns the SQL)
 go run ./cmd/consumer     # read the topic; stop with Ctrl-C (SIGTERM)
 go run ./cmd/api          # serve on :3100
+go run ./cmd/mcp          # serve MCP on :3200
 go run ./cmd/consumer rebuild
 ```
 
@@ -43,6 +48,8 @@ The same, detached, with logs and a start check, as in the agent repo (`scripts/
 ./scripts/run_consumer.sh            # the same for the consumer; waits for its "consuming ..." line
 ./scripts/run_consumer.sh --replay   # consumer rebuild: recreate the chat messages from the inbox
 ./scripts/stop_api.sh
+./scripts/run_mcp.sh                 # the same for the MCP server; waits for /health
+./scripts/stop_mcp.sh
 ./scripts/stop_consumer.sh           # SIGTERM, so it logs its totals and commits its last offset
 ```
 
@@ -83,6 +90,27 @@ cursor the API did not issue; `404` for a conversation with no chat messages; `5
 that ran past its 10 second deadline. A client decides from `type`. `docs/design.md` has the
 problem types and the paging rules.
 
+## MCP
+
+`cmd/mcp` gives an agent read-only tools over the same tables. It speaks MCP over streamable HTTP, with no
+session kept between calls, at `http://localhost:3200/mcp` (`GET /health` for the database). Connect GitHub Copilot to it with:
+
+```bash
+copilot mcp add --transport http conv-history-local http://localhost:3200/mcp
+```
+
+| Tool | Answers | Reads |
+|------|---------|-------|
+| `list_accounts` | which accounts have history, how many conversations and messages, when last active | `conversation_summaries` |
+| `get_recent_conversations` | an account's latest conversations (no text) | the `History` service, as the API |
+| `get_transcript` | the chat of a conversation, newest page first, paged back with `before` | the `History` service, as the API |
+| `get_activity_funnel` | how an account's attempts of a flow ended: approved, rejected, failed, abandoned, expired, open, none | `conversation_flow_segments` |
+| `get_latency_stats` | seconds from the request to the card and from the card to the decision, with and without an OTP | `conversation_flow_segments`, `conversation_inbox` |
+| `get_tool_health` | calls and failures of each tool of the agent | `conversation_inbox` |
+
+The account is an argument of each tool, because the PoC has no authentication: an agent that can call
+a tool can read any account. `list_accounts` is how it finds the ids. `docs/design.md` has the rules each tool follows.
+
 ## Configuration
 
 `config.yaml` expands `${VAR:-default}`; a local `.env` (git-ignored) can set the variables.
@@ -90,6 +118,7 @@ problem types and the paging rules.
 | Variable | Default |
 |----------|---------|
 | `SERVER_PORT` | `3100` |
+| `MCP_HOST`, `MCP_PORT` | `127.0.0.1`, `3200` (read by `cmd/mcp` only; it stays on the loopback interface because it has no authentication) |
 | `POSTGRES_DSN` | empty; when set it wins over the fields below |
 | `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | `localhost`, `5432`, `postgres`, empty, `postgres` |
 | `POSTGRES_SSL_MODE` | `disable` |
@@ -124,7 +153,7 @@ If the testing repo is checked out elsewhere, set `MIGRATIONS_REPO` for the make
 make test         # clean cache, every package suite
 make test-race
 make cover        # fails under 96% per package
-make build        # bin/api and bin/consumer
+make build        # bin/api, bin/consumer and bin/mcp
 make it           # integration tests on a throwaway Postgres (needs Docker)
 make check        # vet, conventions (below) and the OpenAPI spec
 make openapi      # regenerate the OpenAPI spec (needs swag)
@@ -163,15 +192,17 @@ Mocks come from `//go:generate mockery` directives next to each port; regenerate
 Hexagonal, as `cpgs-clg-core`: `internal/core` never imports `internal/infrastructure`.
 
 ```text
-cmd/{api,consumer}/             wiring only
+cmd/{api,consumer,mcp}/         wiring only
 internal/config/                config.yaml loader
 internal/core/domain/           types and sentinel errors
 internal/core/projection/       event -> message, ingest, rebuild
 internal/core/history/          paging rules
+internal/core/insights/         statistics: funnel, latency, tool health, accounts
 internal/core/async/            the one place that starts goroutines (swappable executor)
 internal/core/port/{repository,service,resource}/   interfaces + mocks/
 internal/infrastructure/
   api/ api/handler/             Echo server and handlers
+  mcp/                          MCP server: tools, output types, error wording
   kafka/                        decoder, consumer loop, source (lib-go-kafkalizer)
   logging/                      lib-go-log adapter
   postgresql/ postgresql/repository/   pgx pool, inbox, messages, SQL/

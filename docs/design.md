@@ -416,6 +416,53 @@ The types are tag URIs ([RFC 4151](https://www.rfc-editor.org/info/rfc4151/)): a
 this table is where a type is documented. A client does not dereference them. A type keeps its meaning for good; a new kind of problem gets a new type, and a status
 that means nothing more than itself uses `about:blank`.
 
+## MCP
+
+`cmd/mcp` serves the history to an agent as MCP tools (SDK `modelcontextprotocol/go-sdk`, streamable HTTP, no session kept, so any
+instance answers any call). It is a third binary beside the API and the consumer, on `mcp.port` (3200), over the same
+Postgres. Like the API it has **no authentication**: an agent that reaches it can read any account, so it must not be deployed. It listens on
+`127.0.0.1` unless `MCP_HOST` says otherwise, so the PoC is not offered to the network by default (the API listens on every interface).
+
+Why not call the HTTP API from the tools: the API pages raw messages, which is the wrong grain for statistics (a funnel would walk
+every page of every conversation), and no route exposes the outcome of a payment, which only `conversation_flow_segments` knows.
+So the tools that read chat (`get_recent_conversations`, `get_transcript`) call the same `History` service as the API, and the
+statistics have their own read-only queries in `internal/infrastructure/postgresql/repository/SQL/insight_*.sql` and
+`list_accounts.sql`, behind `repository.InsightsRepository` and `service.Insights` (`internal/core/insights`).
+
+| Tool | Arguments | Notes |
+|------|-----------|-------|
+| `list_accounts` | `limit` (default 20, max 100), `offset` | Groups `conversation_summaries`; an account with only tool events is not listed, as in the API |
+| `get_recent_conversations` | `id_yape_account`, `limit` (default 10) | Counts and times, no text |
+| `get_transcript` | `conversation_id`, `limit` (default 30), `before` | Newest page; `older_cursor` pages back |
+| `get_activity_funnel` | `id_yape_account`, `flow` (default `p2p`), `days` (default 30, max 365) | One segment is one attempt. `cards_offered` = attempts minus `none`; `approval_rate` = approved over the settled ones (everything but `open`) |
+| `get_latency_stats` | as above | `ask_to_card_seconds` is the agent's time, `card_to_resolution_seconds` the person's. Attempts that never reached a card are left out |
+| `get_tool_health` | as above, `flow` ignored | Any outcome but `ok` counts as a failure |
+
+**Rules every tool follows**
+
+- **Scoped to the account.** Each statement finds the account's conversations with `conversation_id = ANY (ARRAY(SELECT conversation_id FROM
+  conversation_summaries WHERE id_yape_account = $1))`, the form that reaches the inbox's primary key (see Reading a conversation by flow).
+  A test pins the form in every statement, and `it/history/insights_test.go` checks on real Postgres that one account never sees another's rows.
+- **Read-only.** A test fails if a statement holds `insert`, `update`, `delete`, `truncate`, `drop`, `alter` or `create`. Every tool is annotated `readOnlyHint`.
+- **Closed input.** An argument a tool does not declare is refused, and `id_yape_account` is required where it applies. There is no tool that takes SQL.
+- **Untrusted text.** Message text is what users wrote. `get_transcript` says so in its description and the server's instructions repeat it. Text a
+  guardrail blocked never reaches the tools: the inbox keeps it in the payload of `UserMessageBlocked`, like every event, but the only chat the tools read is
+  `conversation_messages`, which never holds it, and the statements that read the inbox select a tool name and an outcome and no payload text.
+- **Errors worded for the model.** A mistake of the model says what to fix (`days must be from 1 to 365`); a store failure says only "the history is
+  unavailable; try again" and the cause goes to the log.
+- **Logs.** A call logs the tool name, the outcome and the time. No account, conversation id, cursor or text, as in Privacy.
+- **Shape.** Times are RFC 3339 in UTC, durations are seconds rounded to a tenth, rates to a thousandth, and a list is `[]` and never `null`.
+- **Bounded.** A call has a 10 second deadline, and a list is at most 100 entries.
+
+**Limits to know**
+
+- The statistics are per account. An account id that does not exist answers with zeros, the same as an account with no attempts; `list_accounts` is how to tell.
+- Events carry no structured amounts or recipients (see the event design guide of the PoC), so nothing here can total money or rank recipients. An amount exists only
+  inside message text. For money, join the payments ledger or add fields to `ConfirmationRequested`.
+- `expired` and `open` depend on the time of the read: a card is `open` for ten minutes and `expired` after.
+- `conversation_inbox` has no index on the account, so the tool statements reach it through the summaries. `list_accounts` groups the whole summaries
+  table, which is fine for a PoC and not for millions of accounts.
+
 ## OpenAPI
 
 The contract is `docs/ms-ml-conv-history-bs-openapi.yml` (Swagger 2.0), generated by `swag init` from the
