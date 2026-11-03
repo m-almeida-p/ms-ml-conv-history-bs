@@ -1,4 +1,4 @@
-# ms-ml-conv-history-bs: two binaries (cmd/api, cmd/consumer).
+# ms-ml-conv-history-bs: three binaries (cmd/api, cmd/consumer, cmd/mcp).
 # Mocks come from //go:generate directives next to each port; `make mocks` only runs them.
 
 GO ?= go
@@ -21,11 +21,12 @@ PACKAGES = $$($(GO) list ./internal/... | grep -v -e /mocks -e '/testsupport$$')
 help:
 	@sed -n 's/^##//p' $(MAKEFILE_LIST) | column -t -s ':' | sed -e 's/^/ /'
 
-## build: build both binaries into ./bin
+## build: build the three binaries into ./bin
 .PHONY: build
 build:
 	$(GO) build -o bin/api ./cmd/api
 	$(GO) build -o bin/consumer ./cmd/consumer
+	$(GO) build -o bin/mcp ./cmd/mcp
 
 ## test: clean the test cache and run every package suite
 .PHONY: test

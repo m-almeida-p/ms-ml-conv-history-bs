@@ -3,9 +3,12 @@
 package config
 
 import (
+	"cmp"
 	"fmt"
+	"net"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -22,6 +25,7 @@ var (
 // Config is the whole service configuration.
 type Config struct {
 	Server   ServerConfig   `yaml:"server"`
+	MCP      MCPConfig      `yaml:"mcp"`
 	Postgres PostgresConfig `yaml:"postgres"`
 	Kafka    KafkaConfig    `yaml:"kafka"`
 	Logging  LoggingConfig  `yaml:"logging"`
@@ -30,6 +34,22 @@ type Config struct {
 // ServerConfig configures the HTTP reader.
 type ServerConfig struct {
 	Port int `yaml:"port"`
+}
+
+// defaultMCPHost is where the MCP server listens when no host is set. The server has no
+// authentication and lists accounts, so it stays on the loopback interface unless told otherwise.
+const defaultMCPHost = "127.0.0.1"
+
+// MCPConfig configures the MCP server. A Port of 0 means the section is absent, which only
+// cmd/mcp treats as an error: the API and the consumer do not read it.
+type MCPConfig struct {
+	Host string `yaml:"host"`
+	Port int    `yaml:"port"`
+}
+
+// Addr is the address the MCP server listens on: the host, or the loopback interface when none is set.
+func (c MCPConfig) Addr() string {
+	return net.JoinHostPort(cmp.Or(c.Host, defaultMCPHost), strconv.Itoa(c.Port))
 }
 
 // PostgresConfig configures the pool. DSN, when set, wins over the discrete
@@ -169,6 +189,9 @@ func validate(cfg Config) error {
 	if err := validateServer(cfg.Server); err != nil {
 		return err
 	}
+	if err := validateMCP(cfg.MCP); err != nil {
+		return err
+	}
 	if err := validatePostgres(cfg.Postgres); err != nil {
 		return err
 	}
@@ -186,6 +209,14 @@ func validate(cfg Config) error {
 func validateServer(cfg ServerConfig) error {
 	if cfg.Port < 1 || cfg.Port > 65535 {
 		return fmt.Errorf("server.port must be between 1 and 65535")
+	}
+
+	return nil
+}
+
+func validateMCP(cfg MCPConfig) error {
+	if cfg.Port < 0 || cfg.Port > 65535 {
+		return fmt.Errorf("mcp.port must be between 1 and 65535")
 	}
 
 	return nil

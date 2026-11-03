@@ -1,6 +1,13 @@
 server:
   port: ${SERVER_PORT:-3100}
 
+# The MCP server (cmd/mcp): tools over the history for an agent. Like the API, it has no
+# authentication, so it must not be deployed.
+mcp:
+  # Loopback by default: there is no authentication, so the server is not offered to the network.
+  host: ${MCP_HOST:-127.0.0.1}
+  port: ${MCP_PORT:-3200}
+
 # Same layout as ms-ml-genai-agents-bs, so a DSN or the discrete fields work alike.
 postgres:
   # Full connection string. When set it wins over the discrete fields below.

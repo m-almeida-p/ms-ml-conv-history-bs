@@ -16,7 +16,7 @@ const repoConfig = "../../config.yaml"
 // envKeys are every variable config.yaml reads, cleared so the developer's shell
 // cannot leak into a case.
 var envKeys = []string{
-	"SERVER_PORT",
+	"SERVER_PORT", "MCP_HOST", "MCP_PORT",
 	"POSTGRES_DSN", "POSTGRES_HOST", "POSTGRES_PORT", "POSTGRES_USER", "POSTGRES_PASSWORD",
 	"POSTGRES_DB", "POSTGRES_SSL_MODE", "POSTGRES_MAX_CONNS", "POSTGRES_MIN_CONNS",
 	"POSTGRES_CONN_MAX_LIFETIME", "POSTGRES_CONN_MAX_IDLE_TIME", "POSTGRES_CONNECT_TIMEOUT",
@@ -65,6 +65,7 @@ func TestExpandEnvWithDefaults(t *testing.T) {
 func TestLoad(t *testing.T) {
 	defaults := Config{
 		Server: ServerConfig{Port: 3100},
+		MCP:    MCPConfig{Host: "127.0.0.1", Port: 3200},
 		Postgres: PostgresConfig{
 			Host: "localhost", Port: 5432, User: "postgres", Database: "postgres", SSLMode: "disable",
 			MaxConns: 10, MinConns: 2, ConnMaxLifetimeSeconds: 3600, ConnMaxIdleTimeSeconds: 300, ConnectTimeoutSeconds: 10,
@@ -87,12 +88,14 @@ func TestLoad(t *testing.T) {
 		{
 			name: "environmentOverrides",
 			env: map[string]string{
-				"SERVER_PORT": "8080", "POSTGRES_HOST": "db", "POSTGRES_PASSWORD": "secret", "POSTGRES_MAX_CONNS": "20",
+				"SERVER_PORT": "8080", "MCP_HOST": "0.0.0.0", "MCP_PORT": "9000", "POSTGRES_HOST": "db", "POSTGRES_PASSWORD": "secret", "POSTGRES_MAX_CONNS": "20",
 				"KAFKA_CLIENT_BROKERS": "kafka:29092", "KAFKA_AUTO_OFFSET_RESET": "latest", "LOG_LEVEL": "debug",
 				"KAFKA_MAX_POLL_INTERVAL_MS": "20000", "KAFKA_SESSION_TIMEOUT_MS": "6000",
 			},
 			want: func(c Config) Config {
 				c.Server.Port = 8080
+				c.MCP.Host = "0.0.0.0"
+				c.MCP.Port = 9000
 				c.Postgres.Host = "db"
 				c.Postgres.Password = "secret"
 				c.Postgres.MaxConns = 20
@@ -115,6 +118,8 @@ func TestLoad(t *testing.T) {
 		},
 		{name: "serverPortZero", env: map[string]string{"SERVER_PORT": "0"}, wantErr: "server.port"},
 		{name: "serverPortTooHigh", env: map[string]string{"SERVER_PORT": "70000"}, wantErr: "server.port"},
+		{name: "mcpPortTooHigh", env: map[string]string{"MCP_PORT": "70000"}, wantErr: "mcp.port"},
+		{name: "mcpPortNegative", env: map[string]string{"MCP_PORT": "-1"}, wantErr: "mcp.port"},
 		{name: "postgresPortZero", env: map[string]string{"POSTGRES_PORT": "0"}, wantErr: "postgres.port"},
 		{name: "postgresSSLModeUnknown", env: map[string]string{"POSTGRES_SSL_MODE": "bogus"}, wantErr: "postgres.ssl_mode"},
 		{name: "postgresMaxConnsZero", env: map[string]string{"POSTGRES_MAX_CONNS": "0"}, wantErr: "postgres.max_conns"},
@@ -340,6 +345,7 @@ func TestLoadDefaultsAreSubjectToTheSameRules(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, 3100, got.Server.Port)
+	assert.Zero(t, got.MCP.Port, "a file without an mcp section loads: only cmd/mcp needs the port")
 	assert.Equal(t, "postgres://u:p@h/d?x=a#b", got.Postgres.DSN, "a default with a # is not a comment")
 	assert.Equal(t, "null", got.Kafka.Topic, "a default of null is the text null")
 }
@@ -368,6 +374,24 @@ func TestKafkaWarnings(t *testing.T) {
 			require.Len(t, warnings, 1)
 			assert.Contains(t, warnings[0], tt.wantIn)
 			assert.Contains(t, warnings[0], "history")
+		})
+	}
+}
+
+func TestMCPAddr(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  MCPConfig
+		want string
+	}{
+		{name: "hostAndPort", cfg: MCPConfig{Host: "0.0.0.0", Port: 9000}, want: "0.0.0.0:9000"},
+		{name: "noHostStaysOnTheLoopback", cfg: MCPConfig{Port: 3200}, want: "127.0.0.1:3200"},
+		{name: "anIPv6HostIsBracketed", cfg: MCPConfig{Host: "::1", Port: 3200}, want: "[::1]:3200"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, tt.cfg.Addr())
 		})
 	}
 }
