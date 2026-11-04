@@ -154,10 +154,10 @@ make test         # clean cache, every package suite
 make test-race
 make cover        # fails under 96% per package
 make build        # bin/api, bin/consumer and bin/mcp
-make it           # integration tests on a throwaway Postgres (needs Docker)
+make it           # integration tests; they start their own Postgres, Kafka, Schema Registry and Connect in Docker (3 minutes) and touch nothing else
 make check        # vet, conventions (below) and the OpenAPI spec
 make openapi      # regenerate the OpenAPI spec (needs swag)
-make pipeline     # end to end on the local cluster; fails if the stack is down
+make pipeline     # only the pipeline tests (Kafka, Schema Registry, Connect with Debezium, Postgres), also all in Docker
 local/scripts/verify.sh   # compares the history with the agent's event store
 ```
 
@@ -176,13 +176,36 @@ races (a shared counter, a shared map) make them fail. `scripts/check-convention
 production code starts no goroutine outside `internal/core/async`, and a test does not wait with
 `time.Sleep`.
 
-### Process-level tests
+### Integration tests
 
-`make it` and `make pipeline` also run the built consumer as a process: a database outage longer than
-`max.poll.interval.ms` (the test Postgres container is stopped and started again), SIGTERM while the
-consumer retries against a dead database, records of every shape the broker can carry (near 1 MB, each
-compression codec, another schema id, extra fields, no key) and a lost replication slot rehearsed with a
-second connector that has its own slot, publication and topic.
+`make it` needs Docker and nothing else: it does not look for the local cluster, does not read its ports and writes
+nothing to it. The tests start what they need, with host ports picked free at that moment, a memory cap on every
+container, and unique names for every topic, consumer group, connector, replication slot and conversation.
+
+| Tests | What they start |
+|-------|-----------------|
+| `TestInsights`, the read API, the schema, summaries, paging, concurrency | one Postgres 18 per test |
+| `TestPipelineTopic`, `TestPipelineStoresRecordsOfEveryShapeTheBrokerCanCarry`, the two outage tests | a Kafka broker (`cp-kafka` 7.5.3, KRaft, no ZooKeeper) shared by the run, and a Postgres 18 per test; the outage tests stop that Postgres |
+| `TestPipelineThroughDebezium`, `TestPipelineRecoversFromALostReplicationSlot` | the same Kafka, plus Schema Registry 7.5.3, a Connect 7.5.3 worker with the Debezium PostgreSQL connector 2.5.4, and the agent's Postgres 18 with `wal_level=logical` and its `conversation_events` |
+
+The pipeline tests run the built consumer as a process: a database outage longer than `max.poll.interval.ms` (the Postgres
+container is stopped and started again), SIGTERM while the consumer retries against a dead database, records of every
+shape the broker can carry (near 1 MB, each compression codec, another schema id, extra fields, no key), a lost replication
+slot rehearsed with a second connector that has its own slot, publication and topic, and the whole chain from an insert in
+`conversation_events` to the chat in the history.
+
+The Kafka, Schema Registry, Connect and agent Postgres are heavy, so the first test that needs them starts them and the
+rest of the run shares them; `TestMain` removes them at the end. Together they are capped at about 2.6 GiB (Kafka 900 MiB,
+Connect 1100, Schema Registry 450, Postgres 256), and the whole suite takes about 3 minutes on one CPU. A run needs:
+
+- Docker with room for that, beside whatever else it runs. The first run pulls the images and builds
+  `conv-history-it/connect:7.5.3-debezium-2.5.4` from `it/history/testdata/connect/Dockerfile`, which downloads the Debezium
+  connector from Maven Central and checks its SHA-1. Docker keeps the image, so later runs need no network.
+- The testing repo checked out beside this one: the history migrations and the agent's
+  (`ml-genai-agents-bs-testing/migrations/agent/conversation`; `AGENT_MIGRATIONS_DIR` and `HISTORY_MIGRATIONS_DIR` point elsewhere).
+
+A run killed before `TestMain` leaves its containers behind (Ryuk is off: Colima does not give it the Docker socket).
+They are labelled: `docker rm -f $(docker ps -aq --filter label=conv-history-it)`.
 
 Mocks come from `//go:generate mockery` directives next to each port; regenerate one with
 `go generate ./internal/core/port/service/<file>.go`.

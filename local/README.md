@@ -27,22 +27,24 @@ Settings come from `config.yaml`; a local `.env` (git-ignored) can override them
 ## End-to-end tests
 
 ```bash
-make pipeline
+make pipeline      # only these; make it runs them with the rest
 ```
 
-Needs the cluster up and the connector `RUNNING`. It starts a throwaway Postgres for the
-history, runs the real consumer binary and checks:
+They need Docker and nothing of this folder's cluster: the tests start their own Kafka, Schema Registry, Connect with the
+Debezium connector and Postgres (see Integration tests in the main README), so they run with the cluster down and never write to
+it. They run the real consumer binary against a throwaway Postgres for the history and check:
 
 - rows inserted in the agent's `conversation_events` reach `conversation_messages` and `conversation_summaries` through
-  Debezium and Kafka (the test removes its rows afterwards);
+  Debezium and Kafka;
 - the same record sent three times leaves one inbox row;
 - records sent in reverse order across partitions read back in order;
 - a tombstone and malformed records change nothing and do not block the partition;
-- SIGTERM stops the process with exit 0 and every offset committed.
+- SIGTERM stops the process with exit 0 and every offset committed;
+- a database outage longer than the poll interval loses nothing and doubles nothing, and a lost replication slot is
+  recovered by a new snapshot.
 
-The Debezium test leaves its insert records on the shared topic (`conversation_id` starting
-with `pipeline-dbz-`, account `acc-pipeline`). A consumer that reads the topic from the start
-will project them; filter on that prefix or rebuild after a `--clean`.
+Nothing is left on the shared topic or in your history tables. To check the cluster you are running instead, use
+`local/scripts/verify.sh` below.
 
 ## Verify the history against the event store
 
