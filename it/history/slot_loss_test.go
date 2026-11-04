@@ -15,24 +15,31 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// rehearsalConnector is a copy of the conversation-events connector with a slot,
-// a publication and a topic prefix of its own, so the rehearsal never touches the
-// real connector, its slot or its topic.
-type rehearsalConnector struct {
+// connector is a copy of the conversation-events connector (cluster: ms-ml-genai-agents-bs/local/debezium) with
+// a slot, a publication and a topic prefix of its own, so no test shares a slot or a topic with another.
+type connector struct {
 	name, slot, prefix string
 	connectURL         string
+	db                 agentDatabase
 }
 
-func (c rehearsalConnector) topic() string { return c.prefix + ".public.conversation_events" }
+// newConnector returns a connector whose names are unique to the test, and whose slot and publication share
+// the id, as the conversation-events connector's do.
+func newConnector(s stack, id string) connector {
+	return connector{name: id, slot: id, prefix: id, connectURL: s.connectURL, db: s.agentDB}
+}
 
-func (c rehearsalConnector) config() map[string]any {
+func (c connector) topic() string { return c.prefix + ".public.conversation_events" }
+
+func (c connector) config() map[string]any {
 	return map[string]any{
 		"connector.class":                        "io.debezium.connector.postgresql.PostgresConnector",
 		"tasks.max":                              "1",
-		"database.hostname":                      "db",
+		"database.hostname":                      c.db.host,
 		"database.port":                          "5432",
-		"database.user":                          "postgres",
-		"database.dbname":                        "postgres",
+		"database.user":                          c.db.user,
+		"database.password":                      c.db.password,
+		"database.dbname":                        c.db.name,
 		"plugin.name":                            "pgoutput",
 		"slot.name":                              c.slot,
 		"publication.name":                       c.slot,
@@ -52,7 +59,7 @@ func (c rehearsalConnector) config() map[string]any {
 	}
 }
 
-func (c rehearsalConnector) register(t *testing.T) {
+func (c connector) register(t *testing.T) {
 	t.Helper()
 
 	body, err := json.Marshal(map[string]any{"name": c.name, "config": c.config()})
@@ -60,7 +67,7 @@ func (c rehearsalConnector) register(t *testing.T) {
 	resp, err := http.Post(c.connectURL+"/connectors", "application/json", bytes.NewReader(body))
 	require.NoError(t, err)
 	defer resp.Body.Close()
-	require.Equal(t, http.StatusCreated, resp.StatusCode, "the rehearsal connector was registered")
+	require.Equal(t, http.StatusCreated, resp.StatusCode, "the connector was registered")
 
 	eventually(t, 60*time.Second, c.name+" running", func() bool {
 		r, err := http.Get(c.connectURL + "/connectors/" + c.name + "/status")
@@ -78,7 +85,7 @@ func (c rehearsalConnector) register(t *testing.T) {
 	})
 }
 
-func (c rehearsalConnector) remove(t *testing.T) {
+func (c connector) remove(t *testing.T) {
 	t.Helper()
 
 	req, err := http.NewRequest(http.MethodDelete, c.connectURL+"/connectors/"+c.name, nil)
@@ -122,8 +129,7 @@ func insertChat(t *testing.T, agent *pgxpool.Pool, conversation string, from, to
 // new connector takes a new snapshot. The history must end with every message once,
 // the rows written during the gap included, and the repeats absorbed by the inbox.
 func TestPipelineRecoversFromALostReplicationSlot(t *testing.T) {
-	s := requireKafka(t)
-	requireDebezium(t, s)
+	s := requireDebezium(t)
 
 	history, historyDSN := newHistoryDB(t)
 	ctx := context.Background()
@@ -133,15 +139,12 @@ func TestPipelineRecoversFromALostReplicationSlot(t *testing.T) {
 	t.Cleanup(agent.Close)
 
 	id := strings.ReplaceAll(uniqueName("rehearsal"), "-", "_")
-	first := rehearsalConnector{name: id + "_a", slot: id, prefix: id, connectURL: s.connectURL}
-	second := rehearsalConnector{name: id + "_b", slot: id, prefix: id, connectURL: s.connectURL}
+	first, second := newConnector(s, id), newConnector(s, id)
+	first.name, second.name = id+"_a", id+"_b"
 
 	conversation := uniqueName("slot-loss")
-	t.Cleanup(func() {
-		_, err := agent.Exec(context.Background(), "DELETE FROM conversation_events WHERE conversation_id = $1", conversation)
-		assert.NoError(t, err, "the rehearsal rows are removed from the agent's event store")
-	})
-	// Cleanups run last in, first out: the connectors and the slot go before the rows.
+	// The connectors and the slot go when the test ends: the agent's database is shared by the tests of the
+	// run, and a slot that nobody reads holds WAL.
 	t.Cleanup(func() {
 		first.remove(t)
 		second.remove(t)

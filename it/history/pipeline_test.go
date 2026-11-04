@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -65,25 +66,26 @@ func waitForMessages(t *testing.T, pool *pgxpool.Pool, conversationID string, n 
 
 // TestPipelineThroughDebezium inserts rows into the agent's event store, as the
 // agent does, and waits for the chat to appear in the history: conversation_events
-// -> WAL -> Debezium -> Kafka -> consumer -> inbox -> messages. It needs the local
-// cluster with the conversation-events connector running. The history database is a
-// throwaway one; the topic and the agent's database are the real ones, and the
-// rows are removed afterwards.
+// -> WAL -> Debezium -> Kafka -> consumer -> inbox -> messages. The whole chain is
+// started for the run in Docker: the agent's database with logical decoding, Kafka,
+// Schema Registry and a Connect worker with the Debezium connector, which this test
+// registers with a slot and a topic of its own. The history database is a throwaway one.
 func TestPipelineThroughDebezium(t *testing.T) {
-	s := requireKafka(t)
-	requireDebezium(t, s)
+	s := requireDebezium(t)
 
 	history, historyDSN := newHistoryDB(t)
 	ctx := context.Background()
 
 	agent, err := pgxpool.New(ctx, s.agentDSN)
 	require.NoError(t, err)
-	t.Cleanup(agent.Close) // registered first, so it runs after the delete below
+	t.Cleanup(agent.Close)
 
+	id := strings.ReplaceAll(uniqueName("pipeline_dbz"), "-", "_")
+	conn := newConnector(s, id)
 	conversation := uniqueName("pipeline-dbz")
 	t.Cleanup(func() {
-		_, err := agent.Exec(context.Background(), "DELETE FROM conversation_events WHERE conversation_id IN ($1, $2)", conversation, conversation+"-after")
-		assert.NoError(t, err, "the test rows are removed from the agent's event store")
+		conn.remove(t)
+		dropSlot(t, agent, id)
 	})
 
 	// Three chat messages among six events, as an agent turn leaves them.
@@ -100,7 +102,11 @@ func TestPipelineThroughDebezium(t *testing.T) {
 		{"UserMessageBlocked", `{"reason": "jailbreak"}`, "p2p"},
 	}
 
-	consumer := startConsumer(t, consumerBinary(t), s.brokers, "yape.public.conversation_events", uniqueName("pipeline-group"), historyDSN)
+	// The connector is running before the rows exist, so they reach the topic through the WAL and
+	// not through the snapshot, as the rows of a live agent do.
+	createTopic(t, s.brokers, conn.topic())
+	conn.register(t)
+	consumer := startConsumer(t, consumerBinary(t), s.brokers, conn.topic(), uniqueName("pipeline-group"), historyDSN)
 
 	tx, err := agent.Begin(ctx)
 	require.NoError(t, err)

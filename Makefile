@@ -47,17 +47,17 @@ cover:
 	@$(GO) test -cover $(PACKAGES) | tee coverage.out
 	@awk -v min=$(MIN_COVERAGE) '/coverage:/ { gsub("%","",$$5); if ($$5+0 < min) { print "FAIL " $$2 " is at " $$5 "%, under " min "%"; bad=1 } } END { exit bad }' coverage.out
 
-## it: integration tests against a throwaway Postgres (needs Docker)
+## it: integration tests. They start what they need in Docker (Postgres, and for the pipeline tests Kafka, Schema Registry and Connect with Debezium) and touch nothing else on the machine
 .PHONY: it
 it:
 	$(GO) clean -testcache
-	$(GO) test -v ./it/...
+	$(GO) test -v -timeout 20m ./it/...
 
-## pipeline: end-to-end tests against the local cluster (Kafka, Debezium, Postgres); fails if the stack is down
+## pipeline: only the pipeline tests (Kafka, Schema Registry, Connect with the Debezium connector and Postgres, all started in Docker); the quick way to iterate on the consumer
 .PHONY: pipeline
 pipeline:
 	$(GO) clean -testcache
-	PIPELINE_REQUIRE_STACK=1 $(GO) test -v -run TestPipeline ./it/history
+	$(GO) test -v -timeout 20m -run TestPipeline ./it/history
 
 ## openapi: regenerate docs/ms-ml-conv-history-bs-openapi.yml from the swag annotations
 .PHONY: openapi

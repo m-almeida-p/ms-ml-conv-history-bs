@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,89 +16,9 @@ import (
 
 	ckafka "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// skipOrFail skips a test whose local stack is missing. With
-// PIPELINE_REQUIRE_STACK set (make pipeline), a missing stack fails the test, so a
-// run that proves nothing cannot pass.
-func skipOrFail(t *testing.T, format string, args ...any) {
-	t.Helper()
-
-	if os.Getenv("PIPELINE_REQUIRE_STACK") != "" {
-		t.Fatalf(format, args...)
-	}
-	t.Skipf(format, args...)
-}
-
-// stack is the local cluster the pipeline tests run against.
-type stack struct {
-	brokers    string
-	agentDSN   string
-	connectURL string
-}
-
-func env(name, fallback string) string {
-	if v := os.Getenv(name); v != "" {
-		return v
-	}
-
-	return fallback
-}
-
-// requireKafka skips the test when the local Kafka does not answer.
-func requireKafka(t *testing.T) stack {
-	t.Helper()
-
-	s := stack{
-		brokers:    env("PIPELINE_KAFKA_BROKERS", "localhost:9092"),
-		agentDSN:   env("PIPELINE_AGENT_DSN", "postgres://postgres@localhost:5432/postgres?sslmode=disable"),
-		connectURL: env("PIPELINE_CONNECT_URL", "http://localhost:8083"),
-	}
-
-	admin := adminClient(t, s.brokers)
-	// The first connection of a cold client can take several seconds.
-	if _, err := admin.GetMetadata(nil, false, 15000); err != nil {
-		skipOrFail(t, "local Kafka at %s does not answer (start the cluster): %v", s.brokers, err)
-	}
-
-	return s
-}
-
-// requireDebezium skips the test unless the events connector runs and the agent's
-// database has the event store.
-func requireDebezium(t *testing.T, s stack) {
-	t.Helper()
-
-	client := http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(s.connectURL + "/connectors/conversation-events/status")
-	if err != nil {
-		skipOrFail(t, "Kafka Connect at %s does not answer: %v", s.connectURL, err)
-	}
-	defer resp.Body.Close()
-
-	var status struct {
-		Connector struct{ State string } `json:"connector"`
-		Tasks     []struct{ State string }
-	}
-	if resp.StatusCode != http.StatusOK || json.NewDecoder(resp.Body).Decode(&status) != nil ||
-		status.Connector.State != "RUNNING" || len(status.Tasks) == 0 || status.Tasks[0].State != "RUNNING" {
-		skipOrFail(t, "the conversation-events connector is not running (register it with local/debezium/register.sh)")
-	}
-
-	pool, err := pgxpool.New(context.Background(), s.agentDSN)
-	require.NoError(t, err)
-	defer pool.Close()
-
-	var hasSequence bool
-	err = pool.QueryRow(context.Background(),
-		`SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'conversation_events' AND column_name = 'sequence')`).Scan(&hasSequence)
-	if err != nil || !hasSequence {
-		skipOrFail(t, "the agent database has no conversation_events with a sequence column")
-	}
-}
 
 func adminClient(t *testing.T, brokers string) *ckafka.AdminClient {
 	t.Helper()
