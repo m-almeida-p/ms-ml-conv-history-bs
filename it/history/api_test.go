@@ -527,7 +527,7 @@ func TestAPI(t *testing.T) {
 			"separators \u2028 and \u2029 inside",
 			"{\"looks\": \"like json\"} ' OR 1=1 --",
 			"",
-			strings.Repeat("x", 900_000), // close to Kafka's default 1 MB record limit
+			strings.Repeat("x", 900_000), // close to the 1 MB a record can carry
 		}
 		for i, text := range texts {
 			_, err := pool.Exec(ctx, `INSERT INTO conversation_messages (conversation_id, sequence, role, author_id, text, event_name, id_yape_account, occurred_at)

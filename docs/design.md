@@ -20,7 +20,7 @@ keyed by `(conversation_id, sequence)`, so a redelivered event writes nothing.
 
 ## Schema
 
-The SQL lives in `ml-genai-agents-bs-testing/migrations/history/conversation/` and comments every column.
+The SQL lives in `ms-ml-conv-history-migrations/migrations/history/conversation/` and comments every column; the tests use a copy of it (`it/history/testdata/schema.sql`).
 
 ```mermaid
 erDiagram
@@ -411,18 +411,8 @@ The service reads; the writers are the consumers. The guards that remain are on 
 Each runs a scenario with every executor of `internal/testsupport/concurrent` (one task at a time, then all
 at once) and compares the outcomes. They fail under `-race` when shared state is introduced.
 
-Production code starts no goroutine outside `internal/core/async`, whose executor a test can swap, and a
-test does not wait with `time.Sleep`; `scripts/check-conventions.sh` enforces both. Nothing in the service
-needs background work yet, so the seam has no caller; `internal/core/async/usage_test.go` is the worked
-reference for the first one:
-
-| Pattern | Use it for | How the test controls it |
-|---------|------------|--------------------------|
-| Fire and forget | one-shot work that must not slow the caller (an audit entry, a metric) | the synchronous executor finishes before the call returns; the real one is awaited on a channel |
-| Deferred executor | proving an ordering | the test queues the tasks and runs them in the order it picks (five fixed orders) |
-| All at once | proving there is no shared state | the queued tasks go to the concurrent helpers, which release them together; the outcome must equal the one-at-a-time outcome, under `-race` |
-| Worker bound to a context | a loop (housekeeping, a lag reporter) | cancel the context and wait on the channel the worker closes; the real executor only, a loop would never return under the synchronous one |
-| One worker per partition | parallel consumption | a finite task per partition, in order within it, each writing only its own slot; the synchronous executor is the reference outcome
+Production code starts no goroutine outside `cmd/`, and a test does not wait with `time.Sleep`; `scripts/check-conventions.sh`
+enforces both.
 
 ## Configuration values
 

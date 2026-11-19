@@ -3,11 +3,10 @@
 # Project conventions that golangci-lint cannot express, in the style of
 # cpgs-clg-core. They keep race conditions from being introduced.
 #
-#   goroutine  production code starts no goroutine of its own. Background work goes
-#              through async.Execute (internal/core/async), which a test can swap
-#              to run it one task at a time, and is covered with the helpers of
-#              internal/testsupport/concurrent under -race. cmd/ wires the process
-#              and may start one.
+#   goroutine  production code starts no goroutine of its own: the service reads and
+#              answers, and the HTTP server runs each request. Shared state is
+#              covered with the helpers of internal/testsupport/concurrent under
+#              -race. cmd/ wires the process and may start one.
 #   sleep      a test does not wait with time.Sleep: a sleep makes a race pass by
 #              luck. Use the concurrent helpers, which wait for the tasks
 #              themselves. The integration helpers that poll a cluster are listed.
@@ -20,7 +19,7 @@ cd "$ROOT"
 status=0
 
 # Files that may start goroutines or sleep, for a stated reason.
-GO_ALLOWED='^(internal/core/async/executor\.go|internal/testsupport/concurrent/concurrent\.go|cmd/.*)$'
+GO_ALLOWED='^(internal/testsupport/concurrent/concurrent\.go|cmd/.*)$'
 SLEEP_ALLOWED='^(it/history/binary_test\.go)$'
 
 files=$(find internal cmd it -type f -name '*.go' 2>/dev/null | sort)
@@ -41,7 +40,7 @@ violations() {
 found=$(violations goroutine '^[[:space:]]*go[[:space:]]+(func|[A-Za-z_])' "$GO_ALLOWED" 1)
 if [ -n "$found" ]; then
 	echo "$found"
-	echo "check-conventions: production code starts a goroutine. Use async.Execute and cover it with internal/testsupport/concurrent under -race; internal/core/async/usage_test.go shows how." >&2
+	echo "check-conventions: production code starts a goroutine. Keep goroutines in cmd/, and cover shared state with internal/testsupport/concurrent under -race." >&2
 	status=1
 fi
 

@@ -82,7 +82,7 @@ func TestMessagePagingAtVolume(t *testing.T) {
 	}
 
 	pool := newPool(t)
-	migrateUp(t, pool)
+	createSchema(t, pool)
 	loadVolume(t, pool)
 	ctx := context.Background()
 
@@ -209,7 +209,7 @@ func TestConversationPagingAtVolume(t *testing.T) {
 	}
 
 	pool := newPool(t)
-	migrateUp(t, pool)
+	createSchema(t, pool)
 	loadVolume(t, pool)
 	ctx := context.Background()
 

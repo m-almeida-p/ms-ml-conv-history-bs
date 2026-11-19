@@ -33,7 +33,7 @@ func sequencesOf(messages []domain.Message) []int {
 
 func TestRead(t *testing.T) {
 	pool := newPool(t)
-	migrateUp(t, pool)
+	createSchema(t, pool)
 	ctx := context.Background()
 	repo := repository.NewPostgresMessageRepository(pool)
 

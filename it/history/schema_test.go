@@ -18,7 +18,7 @@ func columnsOf(t *testing.T, pool *pgxpool.Pool, table string) map[string]column
 	t.Helper()
 
 	rows, err := pool.Query(context.Background(),
-		`SELECT column_name, data_type, is_nullable = 'YES' FROM information_schema.columns WHERE table_name = $1`, table)
+		`SELECT column_name, data_type, is_nullable = 'YES' FROM information_schema.columns WHERE table_schema = 'history' AND table_name = $1`, table)
 	require.NoError(t, err)
 	defer rows.Close()
 
@@ -34,20 +34,12 @@ func columnsOf(t *testing.T, pool *pgxpool.Pool, table string) map[string]column
 	return got
 }
 
-func tableExists(t *testing.T, pool *pgxpool.Pool, table string) bool {
-	t.Helper()
-
-	var exists bool
-	require.NoError(t, pool.QueryRow(context.Background(),
-		`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = $1)`, table).Scan(&exists))
-
-	return exists
-}
-
+// TestSchema pins the shape the service's queries rely on: the columns they read and the keys and indexes that keep a page
+// of messages or of conversations from scanning the account's history. The migrations themselves are tested where they live,
+// in ms-ml-conv-history-migrations.
 func TestSchema(t *testing.T) {
-	pool := newPool(t)
+	pool, _ := newHistoryDB(t)
 	ctx := context.Background()
-	migrateUp(t, pool)
 
 	t.Run("columnsAndTypes", func(t *testing.T) {
 		tests := []struct {
@@ -139,12 +131,12 @@ func TestSchema(t *testing.T) {
 			{
 				name:  "summariesListIndexMatchesTheOrderOfTheList",
 				query: `SELECT indexdef FROM pg_indexes WHERE indexname = 'conversation_summaries_list_idx'`,
-				want:  "CREATE INDEX conversation_summaries_list_idx ON public.conversation_summaries USING btree (id_yape_account, last_occurred_at DESC, conversation_id DESC)",
+				want:  "CREATE INDEX conversation_summaries_list_idx ON history.conversation_summaries USING btree (id_yape_account, last_occurred_at DESC, conversation_id DESC)",
 			},
 			{
 				name:  "accountListIndex",
 				query: `SELECT indexdef FROM pg_indexes WHERE indexname = 'conversation_messages_account_idx'`,
-				want:  "CREATE INDEX conversation_messages_account_idx ON public.conversation_messages USING btree (id_yape_account, occurred_at DESC)",
+				want:  "CREATE INDEX conversation_messages_account_idx ON history.conversation_messages USING btree (id_yape_account, occurred_at DESC)",
 			},
 		}
 
@@ -153,103 +145,6 @@ func TestSchema(t *testing.T) {
 				var got string
 				require.NoError(t, pool.QueryRow(ctx, tt.query).Scan(&got))
 				assert.Equal(t, tt.want, got)
-			})
-		}
-	})
-
-	t.Run("everyColumnHasAComment", func(t *testing.T) {
-		tests := []struct{ table string }{{"conversation_inbox"}, {"conversation_messages"}, {"conversation_summaries"}}
-
-		for _, tt := range tests {
-			t.Run(tt.table, func(t *testing.T) {
-				var uncommented []string
-				require.NoError(t, pool.QueryRow(ctx, `
-					SELECT COALESCE(array_agg(a.attname), '{}') FROM pg_attribute a
-					WHERE a.attrelid = $1::regclass AND a.attnum > 0 AND NOT a.attisdropped
-					  AND col_description(a.attrelid, a.attnum) IS NULL`, tt.table).Scan(&uncommented))
-				assert.Empty(t, uncommented)
-
-				var tableComment *string
-				require.NoError(t, pool.QueryRow(ctx, `SELECT obj_description($1::regclass, 'pg_class')`, tt.table).Scan(&tableComment))
-				assert.NotNil(t, tableComment)
-			})
-		}
-	})
-
-	t.Run("checksAndDefaults", func(t *testing.T) {
-		const insertInbox = `INSERT INTO conversation_inbox (conversation_id, sequence, event_name, event_version, payload, metadata, actor, occurred_at, kafka_topic, kafka_partition, kafka_offset)
-			VALUES ('c', $1::int, 'E', 1, '{}', '{}', $2, now(), 't', 0, 0)`
-		const insertMessage = `INSERT INTO conversation_messages (conversation_id, sequence, role, author_id, text, event_name, occurred_at)
-			VALUES ('c', $1::int, $2, 'a', 'hi', 'E', now())`
-
-		const insertSummary = `INSERT INTO conversation_summaries (id_yape_account, conversation_id, message_count, first_occurred_at, last_occurred_at)
-			VALUES ('a', $1, $2::int, $3::timestamptz, $4::timestamptz)`
-
-		tests := []struct {
-			name    string
-			sql     string
-			args    []any
-			wantErr string
-		}{
-			{name: "summary", sql: insertSummary, args: []any{"s1", 1, "2026-10-20T10:00:00Z", "2026-10-20T10:00:00Z"}},
-			{name: "summaryCountMustBePositive", sql: insertSummary, args: []any{"s2", 0, "2026-10-20T10:00:00Z", "2026-10-20T10:00:00Z"}, wantErr: "conversation_summaries_message_count_check"},
-			{name: "summaryFirstMustNotBeAfterLast", sql: insertSummary, args: []any{"s3", 2, "2026-10-20T11:00:00Z", "2026-10-20T10:00:00Z"}, wantErr: "conversation_summaries_check"},
-			{name: "repeatedSummaryIsRejected", sql: insertSummary, args: []any{"s1", 1, "2026-10-20T10:00:00Z", "2026-10-20T10:00:00Z"}, wantErr: "conversation_summaries_pkey"},
-			{name: "actorUser", sql: insertInbox, args: []any{1, "user"}},
-			{name: "actorAgent", sql: insertInbox, args: []any{2, "agent"}},
-			{name: "actorSystem", sql: insertInbox, args: []any{3, "system"}},
-			{name: "actorNullIsAllowed", sql: insertInbox, args: []any{4, nil}},
-			{name: "actorUnknownIsRejected", sql: insertInbox, args: []any{5, "robot"}, wantErr: "conversation_inbox_actor_check"},
-			{name: "repeatedStreamPositionIsRejected", sql: insertInbox, args: []any{1, "user"}, wantErr: "conversation_inbox_stream_key"},
-			{name: "roleAppUser", sql: insertMessage, args: []any{1, "appUser"}},
-			{name: "roleAppMaker", sql: insertMessage, args: []any{2, "appMaker"}},
-			{name: "roleUnknownIsRejected", sql: insertMessage, args: []any{3, "bot"}, wantErr: "conversation_messages_role_check"},
-			{name: "repeatedMessageIsRejected", sql: insertMessage, args: []any{1, "appUser"}, wantErr: "conversation_messages_pkey"},
-		}
-
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				_, err := pool.Exec(ctx, tt.sql, tt.args...)
-
-				if tt.wantErr != "" {
-					require.Error(t, err)
-					assert.Contains(t, err.Error(), tt.wantErr)
-					return
-				}
-				require.NoError(t, err)
-			})
-		}
-
-		var typ string
-		var truncated bool
-		require.NoError(t, pool.QueryRow(ctx, `SELECT type, truncated FROM conversation_messages WHERE sequence = 1`).Scan(&typ, &truncated))
-		assert.Equal(t, "text", typ)
-		assert.False(t, truncated)
-
-		var receivedSet bool
-		var projected *string
-		require.NoError(t, pool.QueryRow(ctx, `SELECT received_at IS NOT NULL, projected_at::text FROM conversation_inbox WHERE sequence = 1`).Scan(&receivedSet, &projected))
-		assert.True(t, receivedSet)
-		assert.Nil(t, projected)
-	})
-
-	t.Run("upTwiceIsSafeAndKeepsRows", func(t *testing.T) {
-		migrateUp(t, pool)
-
-		var rows int
-		require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM conversation_inbox`).Scan(&rows))
-		assert.Equal(t, 4, rows)
-	})
-
-	t.Run("downRemovesBothTablesAndRepeats", func(t *testing.T) {
-		tests := []struct{ name string }{{"first"}, {"second"}}
-
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				migrateDown(t, pool)
-
-				assert.False(t, tableExists(t, pool, "conversation_inbox"))
-				assert.False(t, tableExists(t, pool, "conversation_messages"))
 			})
 		}
 	})

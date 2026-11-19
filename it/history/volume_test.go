@@ -162,7 +162,7 @@ func TestFlowSegmentsAtVolume(t *testing.T) {
 	}
 
 	pool := newPool(t)
-	migrateUp(t, pool)
+	createSchema(t, pool)
 	loadVolume(t, pool)
 	ctx := context.Background()
 
@@ -239,7 +239,7 @@ func TestFlowSegmentsAtVolume(t *testing.T) {
 	})
 
 	t.Run("aNewConversationIsReadAtOnceAmongTheOthers", func(t *testing.T) {
-		// What the consumer does all day: a conversation grows while the table is large.
+		// A conversation grows while the table is large.
 		_, err := pool.Exec(ctx, `
 			INSERT INTO conversation_inbox (conversation_id, sequence, event_name, event_version, payload, metadata, flow, occurred_at, kafka_topic, kafka_partition, kafka_offset)
 			VALUES ('conv_new', 1, 'UserMessageSent', 1, '{}', '{}', NULL, now(), 't', 0, 900000001),

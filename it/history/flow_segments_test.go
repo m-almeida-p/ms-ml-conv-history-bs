@@ -175,7 +175,7 @@ func TestFlowSegments(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			pool := newPool(t)
-			migrateUp(t, pool)
+			createSchema(t, pool)
 
 			insertFacts(t, pool, "conv_a", tt.facts)
 			// A second conversation in the same table must not mix with the first.
@@ -189,7 +189,7 @@ func TestFlowSegments(t *testing.T) {
 
 	t.Run("anUnresolvedCardOfTheLastRunIsOpenThenExpired", func(t *testing.T) {
 		pool := newPool(t)
-		migrateUp(t, pool)
+		createSchema(t, pool)
 
 		recent := []fact{user(""), agent("p2p"), request("a")}
 		old := []fact{user(""), agent("p2p"), request("a")}
@@ -241,7 +241,7 @@ func TestFlowSegmentsReadTheCardFromThePaymentFacts(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			pool := newPool(t)
-			migrateUp(t, pool)
+			createSchema(t, pool)
 			insertFacts(t, pool, "conv_a", tt.facts)
 
 			ref, segments := refOf(t, pool, "conv_a")
@@ -261,7 +261,7 @@ func TestFlowSegmentsReadTheCardFromThePaymentFacts(t *testing.T) {
 // have holes (a skipped malformed event); the segments report the sequences it holds.
 func TestFlowSegmentsFollowTheSequenceNotThePosition(t *testing.T) {
 	pool := newPool(t)
-	migrateUp(t, pool)
+	createSchema(t, pool)
 
 	insertFacts(t, pool, "conv_a", []fact{user(""), agentFact("p2p"), user("p2p"), agentFact(""), user("")})
 	_, err := pool.Exec(context.Background(),
@@ -278,7 +278,7 @@ func TestFlowSegmentsFollowTheSequenceNotThePosition(t *testing.T) {
 // gives each the segments it has alone, and a conversation that does not exist has none.
 func TestFlowSegmentsAcrossConversations(t *testing.T) {
 	pool := newPool(t)
-	migrateUp(t, pool)
+	createSchema(t, pool)
 
 	insertFacts(t, pool, "conv_a", []fact{user(""), agentFact("p2p"), {name: "ConfirmationRequested", flow: "p2p", ref: "a"}, user("p2p"), user("")})
 	insertFacts(t, pool, "conv_b", []fact{user(""), agentFact("bill_payment"), user("bill_payment")})
@@ -326,7 +326,7 @@ func TestFlowSegmentsApprovalLifetime(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			pool := newPool(t)
-			migrateUp(t, pool)
+			createSchema(t, pool)
 
 			insertFacts(t, pool, "conv_a", []fact{
 				{name: "UserMessageSent", ago: tt.ago},
@@ -346,7 +346,7 @@ func TestFlowSegmentsApprovalLifetime(t *testing.T) {
 // real inbox that is minutes.
 func TestFlowSegmentsReadOnlyTheConversationAsked(t *testing.T) {
 	pool := newPool(t)
-	migrateUp(t, pool)
+	createSchema(t, pool)
 
 	insertFacts(t, pool, "conv_asked", []fact{user(""), agentFact("p2p"), {name: "ConfirmationRequested", flow: "p2p", ref: "a"}})
 	_, err := pool.Exec(context.Background(), `

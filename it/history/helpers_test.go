@@ -3,10 +3,7 @@ package history_test
 
 import (
 	"context"
-	"os"
-	"path/filepath"
-	"slices"
-	"sort"
+	_ "embed"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -15,93 +12,49 @@ import (
 	"github.com/yaperos/ms-ml-conv-history-bs/internal/testsupport"
 )
 
-// defaultMigrationsDir is where the testing repo keeps this service's migrations,
-// as a sibling checkout. HISTORY_MIGRATIONS_DIR points elsewhere.
-const defaultMigrationsDir = "../../../ml-genai-agents-bs-testing/migrations/history/conversation"
+// historySchema is the schema the service reads: the tables, the indexes and the flow-segments view, in the schema history.
+//
+//go:embed testdata/schema.sql
+var historySchema string
 
-func migrationsDir(t *testing.T) string {
+// historyDSN is a throwaway Postgres whose search_path is the schema history, as the service's default.
+func historyDSN(t *testing.T) string {
 	t.Helper()
 
-	dir := os.Getenv("HISTORY_MIGRATIONS_DIR")
-	if dir == "" {
-		dir = defaultMigrationsDir
-	}
-	info, err := os.Stat(dir)
-	require.NoError(t, err, "the history migrations live in the testing repo; check it out beside this one or set HISTORY_MIGRATIONS_DIR")
-	require.True(t, info.IsDir(), dir)
-
-	return dir
+	return testsupport.PostgresDSN(t) + "&search_path=history"
 }
 
 // newPool starts a throwaway Postgres and returns a pool on it, closed on cleanup.
 func newPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 
-	pool, err := pgxpool.New(context.Background(), testsupport.PostgresDSN(t))
+	pool, err := pgxpool.New(context.Background(), historyDSN(t))
 	require.NoError(t, err)
 	t.Cleanup(pool.Close)
 
 	return pool
 }
 
-// newHistoryDB starts a throwaway Postgres with the history tables and returns a
-// pool on it and its DSN, which a consumer process can use.
+// newHistoryDB starts a throwaway Postgres with the history schema and returns a
+// pool on it and its DSN, which a started binary can use.
 func newHistoryDB(t *testing.T) (*pgxpool.Pool, string) {
 	t.Helper()
 
-	dsn := testsupport.PostgresDSN(t)
+	dsn := historyDSN(t)
 	pool, err := pgxpool.New(context.Background(), dsn)
 	require.NoError(t, err)
 	t.Cleanup(pool.Close)
-	migrateUp(t, pool)
+	createSchema(t, pool)
 
 	return pool, dsn
 }
 
-// runMigration executes one migration file.
-func runMigration(t *testing.T, pool *pgxpool.Pool, file string) {
+// createSchema creates the history schema. Every statement is IF NOT EXISTS or CREATE OR REPLACE, so a second call is safe.
+func createSchema(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 
-	sql, err := os.ReadFile(filepath.Join(migrationsDir(t), file))
+	_, err := pool.Exec(context.Background(), historySchema)
 	require.NoError(t, err)
-
-	_, err = pool.Exec(context.Background(), string(sql))
-	require.NoError(t, err, file)
-}
-
-// migrateUp applies every up migration of the folder, in order: the inbox and the
-// messages tables, then the views over them.
-func migrateUp(t *testing.T, pool *pgxpool.Pool) {
-	t.Helper()
-
-	for _, file := range migrationFiles(t, ".up.sql", false) {
-		runMigration(t, pool, file)
-	}
-}
-
-// migrateDown applies every down migration, last first.
-func migrateDown(t *testing.T, pool *pgxpool.Pool) {
-	t.Helper()
-
-	for _, file := range migrationFiles(t, ".down.sql", true) {
-		runMigration(t, pool, file)
-	}
-}
-
-func migrationFiles(t *testing.T, suffix string, reverse bool) []string {
-	t.Helper()
-
-	files, err := filepath.Glob(filepath.Join(migrationsDir(t), "*"+suffix))
-	require.NoError(t, err)
-	sort.Strings(files)
-	if reverse {
-		slices.Reverse(files)
-	}
-	for i, f := range files {
-		files[i] = filepath.Base(f)
-	}
-
-	return files
 }
 
 // summaryDrift is the number of conversations whose summary differs from what grouping their messages
@@ -128,8 +81,8 @@ func assertNoSummaryDrift(t *testing.T, pool *pgxpool.Pool) {
 	require.Zero(t, drift, "%d conversation summaries differ from their messages", drift)
 }
 
-// refreshSummaries fills conversation_summaries from the messages, as the migration does. A test that
-// writes messages with plain SQL, and not through the repository, calls it before reading the list.
+// refreshSummaries fills conversation_summaries from the messages, from the messages. A test that
+// writes messages with plain SQL calls it before reading the list.
 func refreshSummaries(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 

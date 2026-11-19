@@ -32,8 +32,8 @@ type attempt struct {
 	resolveAfter time.Duration
 }
 
-// play writes the attempt as the consumer left it: every event in the inbox, and the chat messages (the user's and
-// the agent's text) in the messages table. It is plain SQL, because the writing is done by the Camel consumers now.
+// play writes the attempt as the tables hold it: every event in the inbox, and the chat messages (the user's and the
+// agent's text) in the messages table, with plain SQL.
 func play(t *testing.T, pool *pgxpool.Pool, a attempt) {
 	t.Helper()
 

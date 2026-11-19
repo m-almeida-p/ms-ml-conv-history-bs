@@ -1,5 +1,5 @@
 // Package concurrent holds the helpers of the concurrency tests. They follow the
-// style of cpgs-clg-core's async executor: how a batch of work runs is a function
+// style of cpgs-clg-core's executor: how a batch of work runs is a function
 // value, so the same scenario runs one task at a time to give the reference
 // outcome and all at once to try to break it. Run the tests with -race.
 //

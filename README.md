@@ -121,18 +121,8 @@ a tool can read any account. `list_accounts` is how it finds the ids. `docs/desi
 
 The service reads three tables, in the schema `POSTGRES_SEARCH_PATH` names (`history` by default): `conversation_messages` (the
 chat), `conversation_summaries` (which the conversation list reads) and `conversation_inbox` (which the statistics read, through
-the view `conversation_flow_segments`). The Camel consumers fill them, and the migrations that create the deployed schemas are in
-`../ms-ml-conv-history-migrations` (`migrations/history/conversation`, and `camel_conversation` for the old consumer). The
-integration tests build a throwaway database from the testing repo's older copy of those tables,
-`../ml-genai-agents-bs-testing/migrations/history/conversation/`, in the default schema.
-
-```bash
-make migrations/up
-make migrations/down CONFIRM=yes
-```
-
-If the testing repo is checked out elsewhere, set `MIGRATIONS_REPO` for the make targets and
-`HISTORY_MIGRATIONS_DIR` for the tests.
+the view `conversation_flow_segments`). The Camel consumers fill them, and the migrations that create them are in
+`../ms-ml-conv-history-migrations` (`migrations/history/conversation`; this service owns no migration).
 
 ## Tests
 
@@ -149,22 +139,23 @@ make openapi      # regenerate the OpenAPI spec (needs swag)
 ### Concurrency
 
 Race conditions are kept out by tests that run under `make test-race`, written in the style of
-`cpgs-clg-core`'s async executor: how a batch of work runs is a function value
+`cpgs-clg-core`'s executor: how a batch of work runs is a function value
 (`internal/testsupport/concurrent`). A scenario runs once one task at a time, which gives the reference
 outcome, and once with every task released at the same moment, and the two outcomes must be equal. The
 helpers are small pure functions (`Collect`, `Count`, `Map`, `Orders`, `Outcomes`): each task returns its
 result into its own slot, so a test needs no mutex and no sleep.
 
 Guards exist for the HTTP server, the history service and config loading. `scripts/check-conventions.sh` keeps new
-ones out: production code starts no goroutine outside `internal/core/async`, and a test does not wait with `time.Sleep`.
+ones out: production code starts no goroutine outside `cmd/`, and a test does not wait with `time.Sleep`.
 
 ### Integration tests
 
-`make it` needs Docker and nothing else: it does not look for the local cluster, does not read its ports and writes
-nothing to it. Each test starts one Postgres 18 with a host port picked free at that moment and a memory cap, applies the
-migrations of the testing repo, seeds rows with plain SQL, and checks the read API (`TestRead`, `TestAPI`), the statistics
-(`TestInsights`, `TestFlowSegments`), the schema (`TestSchema`) and paging at volume. The testing repo must be checked out
-beside this one (`HISTORY_MIGRATIONS_DIR` points elsewhere).
+`make it` needs Docker and nothing else, and no other repository: it does not look for the local cluster, does not read its
+ports and writes nothing to it. Each test starts one Postgres 18 in a container (testcontainers) with a host port picked free
+at that moment and a memory cap, creates the schema `history` from `it/history/testdata/schema.sql`, seeds rows with plain SQL,
+and checks the read API (`TestRead`, `TestAPI`), the statistics (`TestInsights`, `TestFlowSegments`), the shape the queries rely
+on (`TestSchema`) and paging at volume. `schema.sql` is a verbatim copy of the four `history/conversation` up migrations of
+`ms-ml-conv-history-migrations`, which stays the source of truth; refresh it with `cat` of that folder when they change.
 
 A run killed early leaves its container behind (Ryuk is off: Colima does not give it the Docker socket). Containers are
 labelled: `docker rm -f $(docker ps -aq --filter label=conv-history-it)`.
@@ -182,7 +173,6 @@ internal/config/                config.yaml loader
 internal/core/domain/           types and sentinel errors
 internal/core/history/          paging rules
 internal/core/insights/         statistics: funnel, latency, tool health, accounts
-internal/core/async/            the one place that starts goroutines (swappable executor)
 internal/core/port/{repository,service}/   interfaces + mocks/
 internal/infrastructure/
   api/ api/handler/             Echo server and handlers

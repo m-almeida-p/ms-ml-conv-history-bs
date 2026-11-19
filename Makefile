@@ -3,9 +3,6 @@
 
 GO ?= go
 MIN_COVERAGE ?= 96
-# The tables are created by the testing repo, which keeps every conversation
-# migration (migrations/history/<flow>/ for this service). These targets run it from here.
-MIGRATIONS_REPO ?= ../ml-genai-agents-bs-testing
 # OpenAPI, generated from the swag annotations in cmd/api/main.go and the handlers,
 # as in cpgs-clg-core. Regenerate with `make openapi` in the same change as any
 # contract change, and `make openapi/check` fails when the committed spec is stale.
@@ -68,7 +65,7 @@ openapi/check:
 		diff -u $(OPENAPI_FILE) $$tmp/api_swagger.yaml > $$tmp/diff || { cat $$tmp/diff; rm -rf $$tmp; echo "The OpenAPI spec is stale: run make openapi"; exit 1; }; \
 		rm -rf $$tmp; echo "OpenAPI spec is up to date"
 
-## check-conventions: no goroutine in production code outside async, no time.Sleep in tests
+## check-conventions: no goroutine in production code outside cmd, no time.Sleep in tests
 .PHONY: check-conventions
 check-conventions:
 	@./scripts/check-conventions.sh
@@ -82,13 +79,3 @@ check: check-conventions openapi/check
 .PHONY: mocks
 mocks:
 	$(GO) generate ./internal/...
-
-## migrations/up: create the history tables of every flow, through the testing repo
-.PHONY: migrations/up
-migrations/up:
-	$(MAKE) -C $(MIGRATIONS_REPO) migrations/up SERVICE=history
-
-## migrations/down: drop the history tables of every flow with all their rows; needs CONFIRM=yes
-.PHONY: migrations/down
-migrations/down:
-	$(MAKE) -C $(MIGRATIONS_REPO) migrations/down SERVICE=history CONFIRM=$(CONFIRM)
