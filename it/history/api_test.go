@@ -22,7 +22,7 @@ func freePort(t *testing.T) int {
 
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 
 	return l.Addr().(*net.TCPAddr).Port
 }
@@ -90,7 +90,7 @@ func TestAPI(t *testing.T) {
 
 		resp, err := client.Get(base + path)
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		var body []byte
 		buf := make([]byte, 1<<20)
 		n, _ := resp.Body.Read(buf)
@@ -111,7 +111,7 @@ func TestAPI(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		return resp.StatusCode == http.StatusOK
 	})
