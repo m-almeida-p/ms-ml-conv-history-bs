@@ -3,7 +3,7 @@
 How the chat history of the agent's conversations is served. Scope: the conversation log of every flow; the P2P flow is the
 first to record facts of its own. This service only reads: the Camel consumers (`ms-ml-conv-history-consumer`, schema `history`; the
 older `ms-ml-camel-conv-history-bs`, schema `camel_history`) write the tables from the topic Debezium publishes, and their own docs
-describe the record, the decoding and the rules for a refused event. A Go consumer once lived here and was removed.
+describe the record, the decoding and the rules for a refused event.
 
 ## Data flow
 
@@ -458,6 +458,6 @@ The API accepts ids that match `^[A-Za-z0-9._:-]{1,128}$` (conversation and acco
 | Task | How |
 |------|-----|
 | Read the other schema (the old consumer's tables) | set `POSTGRES_SEARCH_PATH=camel_history` and restart the API |
-| Recreate the messages and the conversation summaries | the consumers' own tooling (this service no longer has a rebuild) |
+| Recreate the messages and the conversation summaries | the consumers' own tooling |
 | Events deleted from the event store | not published; the history keeps its copy of the conversation. Clear it from the history too if the deletion is for erasure |
 | Integration tests | `make it` starts its own Postgres in Docker, on a host port picked free and with a memory cap, and removes it at the end: it reads and writes nothing of the local cluster |

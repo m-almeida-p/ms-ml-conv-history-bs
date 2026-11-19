@@ -1,6 +1,6 @@
 # Pending: from the PoC to production
 
-Ticket AIP-472, as of 2026-10-20; updated 2026-11-19, when the Go consumer was removed from this repo (the Camel consumers write the history now, so the items about the consumer, the Kafka client and the process-level tests went with it). The pipeline runs end to end locally (agent event store, Debezium, Kafka,
+Ticket AIP-472, as of 2026-10-20; updated 2026-11-19 for a service that only reads (the Camel consumers write the history). The pipeline runs end to end locally (agent event store, Debezium, Kafka,
 inbox, chat history, API). This file lists what is not proven or not built for production.
 
 Status values: **Unproven** (designed from research, never run), **Not started**, **Decision** (someone has

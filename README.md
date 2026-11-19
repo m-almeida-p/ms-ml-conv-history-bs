@@ -5,8 +5,7 @@ HTTP API shaped after the Smooch message, and the history plus statistics about 
 
 It only reads. The history tables are written by the Camel consumers (`ms-ml-conv-history-consumer` writes the schema
 `history`; the older `ms-ml-camel-conv-history-bs` writes `camel_history`), which read the topic Debezium publishes the agent's
-`event_store.conversation_events` to. This service used to hold a Go consumer of its own; it was removed when the consumers
-moved to Camel.
+`event_store.conversation_events` to.
 
 PoC for AIP-472. The API and the MCP server have no authentication, so this service must not be deployed.
 
