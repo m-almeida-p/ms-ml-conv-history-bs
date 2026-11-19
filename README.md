@@ -50,7 +50,16 @@ running instance); `run_api.sh` also takes `--port`. They work from any director
 instance first, and exit at once, with the log path, when the binary dies (a wrong config, an unreachable
 database). Logs go to `scripts/logs/` and are gitignored. `check-conventions.sh` in the same folder is tracked.
 
-`local/README.md` has the local steps.
+### Check it against the table
+
+To see that the API serves what the consumers wrote, produce a conversation (for example with the explorer flows in
+`ml-genai-agents-bs-testing`: `cmd/p2p-explore/scripts/run.sh --flow card`) and compare the API with the table. The schema is
+`history` by default (`POSTGRES_SEARCH_PATH=camel_history` reads the old consumer's tables):
+
+```bash
+curl -s "localhost:3100/v1/conversations/<conversationId>/messages"
+docker exec yape-postgres psql -U postgres -c "select role, text from history.conversation_messages where conversation_id = '<conversationId>' order by sequence"
+```
 
 ## API
 
@@ -181,7 +190,6 @@ internal/infrastructure/
   postgresql/ postgresql/repository/   pgx pool, messages and insights queries, SQL/
 internal/testsupport/           test helpers: throwaway Postgres, concurrent/ (executors)
 it/history/                     integration tests
-local/                          running the API locally
 scripts/                        run_*/stop_* for both binaries, check-conventions.sh (rules the linter cannot express)
 docs/                           design.md and the OpenAPI spec
 ```
