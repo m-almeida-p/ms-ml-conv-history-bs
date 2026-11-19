@@ -1,86 +1,22 @@
 # Design
 
-How the events of the agent's `conversation_events` table become a chat history. Scope: the conversation log of every flow;
-the P2P flow is the first to record facts of its own.
+How the chat history of the agent's conversations is served. Scope: the conversation log of every flow; the P2P flow is the
+first to record facts of its own. This service only reads: the Camel consumers (`ms-ml-conv-history-consumer`, schema `history`; the
+older `ms-ml-camel-conv-history-bs`, schema `camel_history`) write the tables from the topic Debezium publishes, and their own docs
+describe the record, the decoding and the rules for a refused event. A Go consumer once lived here and was removed.
 
 ## Data flow
 
 ```mermaid
-sequenceDiagram
-    participant A as Agent
-    participant D as Debezium
-    participant K as Kafka
-    participant C as Consumer
-    participant P as Postgres (history)
-    Note over A,D: Save writes the events<br/>in one transaction
-    D->>K: flat row, key {"conversation_id": "..."}
-    K->>C: record
-    Note over K,C: decode: skip the header,<br/>parse the JSON and the<br/>two JSON strings
-    C->>P: BEGIN
-    C->>P: INSERT inbox ON CONFLICT (conversation_id, sequence) DO NOTHING
-    alt a new chat event
-        C->>P: UPSERT conversation_messages
-    end
-    C->>P: COMMIT
-    C->>K: commit offset + 1
+flowchart LR
+    A["Agent<br/>event_store.conversation_events"] -->|"WAL"| D["Debezium"] --> K[("Kafka topic")] --> C["Camel consumers"]
+    C --> P[("Postgres<br/>history schema")]
+    P --> API["cmd/api"]
+    P --> MCP["cmd/mcp"]
 ```
 
-The offset moves only after the commit. Delivery is at least once: a redelivered event hits the
-inbox primary key and writes nothing.
-
-## What Debezium publishes
-
-One connector, `conversation-events`, owned by the agent repo (`local/debezium/`). It captures
-`public.conversation_events` only, through its own publication and replication slot, and
-publishes the flat row (no `before`/`after` envelope) to `yape.public.conversation_events`. The table is
-append-only, keyed by `(conversation_id, sequence)` and never pruned, so a re-snapshot can always republish the
-whole history. Every column is published, so
-adding a column to the table adds a field to the record (the decoder ignores fields it does not know), and a
-column that must not leave the database is excluded in the connector.
-
-| Part | Format |
-|------|--------|
-| Key | 5-byte Schema Registry header + `{"conversation_id": "<id>"}` (`message.key.columns`), so a conversation stays on one partition, in order |
-| Value | 5-byte header + the row as JSON: `conversation_id`, `sequence`, `event_name`, `event_version`, `payload`, `metadata`, `correlation_id`, `id_yape_account`, `actor`, `flow`, `occurred_at` |
-| `payload`, `metadata` | JSON **strings** (JSONB arrives as text) |
-| `occurred_at` | RFC 3339, microseconds, `Z` |
-| Delete in the event store | not published (the delete and its tombstone are dropped); the consumer still skips a tombstone if one arrives |
-
-`testdata/events-record.{key,value}.bin` is a real record. The decoder (`internal/infrastructure/kafka/decoder.go`)
-skips the header when the first byte is `0`, accepts plain JSON, parses the two strings,
-ignores unknown fields, and returns `nil` for a tombstone. Anything else it cannot read is a
-`*DecodeError` with topic, partition, offset, reason and field name, never the content.
-
-## Consumer rules
-
-| Case | What happens |
-|------|--------------|
-| New event | stored in the inbox; a chat event also gets its message; offset committed |
-| Event already in the inbox | nothing written; offset committed |
-| Tombstone | offset committed |
-| Record that cannot be decoded | logged without content, counted, offset committed |
-| Event that should project but lacks its text | stored in the inbox without a message, counted as invalid; offset committed |
-| Value the columns cannot hold (sequence or version out of range, an id or name over 128 characters) | refused by the decoder like any malformed record: logged without content, counted, offset committed |
-| Store refuses for good: a constraint violation (SQLSTATE class 23) or data it cannot hold (class 22, such as a NUL character in the payload) | logged with the class, constraint and code only (Postgres puts the failing row in the error detail), counted as rejected, offset committed |
-| A different event at a stream position the inbox already holds (name, version, payload or metadata differ) | refused as rejected and logged at error level, so the event is not lost without a trace |
-| Store error that a retry can fix (database down) | retried in place, wait 1 s doubling to 30 s; the offset does not move until it works or the process stops |
-| Offset commit fails | the error is returned to the Kafka library, which logs it; a later commit covers it; if none comes the broker redelivers and the inbox ignores it |
-
-A record that can never be stored never blocks a partition: retrying it would not help, so it is skipped and counted. A database outage blocks it on purpose, and nothing is
-lost.
-
-The retry loop does not poll, so an outage longer than `max.poll.interval.ms` (`KAFKA_MAX_POLL_INTERVAL_MS`, 5 minutes) makes the broker drop the member from the group. After the
-database returns, the event in hand is stored, its offset commit fails, the broker hands the record out again and the inbox counts it as a duplicate. The outage test shows this with a 10 second
-poll interval: ten events stored, one duplicate, every offset committed. `KAFKA_SESSION_TIMEOUT_MS` (45 seconds) must not exceed the poll interval. The library's loop stops on SIGINT and SIGTERM (it listens for them itself) or on a fatal
-broker error, and returns no error in either case. The process's own signal context tells them
-apart: when the loop ends after the signal, the binary logs its totals and exits 0; when it ends
-with no signal (a fatal broker error), it waits one second for the signal to arrive, then logs its
-totals and exits 1, so a supervisor restarts it. After the signal, no further record is handled or
-committed, which keeps a record that never reaches the store from covering the offset of an event
-left unstored.
-
-The Kafka client is Yape's `lib-go-kafkalizer`. Auto commit is off and its automatic error
-handling is off, because that path publishes to a dead-letter engine this service does not have.
+The tables are written once, by the consumers; both binaries here read them. Delivery to the tables is at least once and
+keyed by `(conversation_id, sequence)`, so a redelivered event writes nothing.
 
 ## Schema
 
@@ -130,15 +66,13 @@ erDiagram
     conversation_messages }o..|| conversation_summaries : "a new message is counted here"
 ```
 
-The inbox keeps every event that arrives, chat or not, with the Kafka coordinates it came from.
-It is the source a rebuild replays. `projected_at` is set in the same transaction as the
-projection, so a stamped row is a processed row. An event that should have projected but lacks its
-text is stamped too (it is stored without a message and counted as invalid), so `projected_at` does not
-find those; the `invalid` counter and the log do.
+The inbox keeps every event that arrived, chat or not, with the Kafka coordinates it came from. The statistics read it, and it is
+the source the consumers replay to recreate the messages. `projected_at` is set in the same transaction as the projection, so a
+stamped row is a processed row.
 
 `conversation_summaries` (history migration `000003`) has one row per conversation of an account: its message count and the times of
 its first and last message. The conversation list reads it, so a page costs the rows it returns and not the account's history (see
-Paging the conversation list). The consumer keeps it in the same transaction that writes a message, and only for a message that was
+Paging the conversation list). The consumers keep it in the same transaction that writes a message, and only for a message that was
 not stored yet: it adds one to the count and widens the first and last times. Those updates commute, so events in any order, or two
 writers at once, end with the same row, and a redelivery or a replay cannot count a message twice. A message with no account is in no
 account's list and is not counted. The primary key is `(id_yape_account, conversation_id)`; the index
@@ -170,9 +104,8 @@ flow that was active when the fact arrived:
 | The dispatcher's, generalist's and other specialists' messages; guardrail and failure facts | none |
 
 So the user message that opens a flow has no flow, and the one that leaves a flow carries the flow it was in. The
-consumer takes the flow as it comes: a name matching `^[a-z][a-z0-9_]{0,63}$` or nothing; anything else is
-skipped as malformed. The repeat check compares it too, so the same position with another flow is rejected.
-The projection copies it to the message, and the API shows it in `metadata.flow` when there is one.
+consumers take the flow as it comes: a name matching `^[a-z][a-z0-9_]{0,63}$` or nothing. They copy it to the message, and the
+API shows it in `metadata.flow` when there is one.
 
 ### Reading a conversation by flow
 
@@ -207,7 +140,7 @@ the 600 conversations of an account 62 ms with `conversation_id = ANY (ARRAY(SEL
 `it/history/flow_segments_test.go` runs the view against real Postgres on seven conversations, and checks from the
 query plan that a read of one conversation scans only its own rows of the inbox.
 
-## Projection
+## What the messages hold
 
 | Event | Role | Text | Author |
 |-------|------|------|--------|
@@ -215,16 +148,9 @@ query plan that a read of one conversation scans only its own rows of the inbox.
 | `AgentMessageSent` | `appMaker` | `payload.text` | `ms-ml-genai-agent-bs` |
 | `GuardrailResponseSent` | `appMaker` | `payload.response_text` | `ms-ml-genai-agent-bs` |
 
-Every other event stays in the inbox only: tool summaries, notifications, confirmations,
-`UserMessageBlocked` (the blocked text never reaches the history) and unknown names. A chat event
-without its text field is invalid, not skipped. An empty string is a valid text.
-
-**Order does not depend on arrival.** The key of a message is `(conversation_id, sequence)`, the
-position the agent gave the event, so records read from three partitions in any order give the
-same rows. **Rebuild** deletes the messages and their conversation summaries and replays the inbox in
-`(conversation_id, sequence)` order, in keyset batches of 500, in one transaction: the replay writes the
-messages and counts them again, readers see the old rows until the commit, and a cancelled run changes
-nothing. The inbox is never modified. A rebuild also repairs summaries that drifted for any reason.
+Every other event stays in the inbox only: tool summaries, notifications, confirmations, `UserMessageBlocked` (the blocked text
+never reaches the history) and unknown names. The key of a message is `(conversation_id, sequence)`, the position the agent gave the
+event, so the order the records arrive in does not matter.
 
 ## API
 
@@ -249,12 +175,12 @@ Link: </v1/conversations/conv_v1_8ab59029-bc3c-4e77-b49f-9fb053d90c52/messages?p
 | Smooch field | Source |
 |--------------|--------|
 | `_id` | the event's `sequence`, as a string; unique within the conversation |
-| `role`, `authorId` | the projection table above |
+| `role`, `authorId` | the table in "What the messages hold" |
 | `received` | the event time, Unix seconds with milliseconds |
 | `metadata` | `sequence`, `eventName`, `truncated`, and `flow` when the message took place in a flow |
 
 Left out: `name`, `avatarUrl`, `actions`, `items`, `mediaUrl`, `quotedMessage`, `subroles`. There is no
-`POST`: messages enter only through Kafka.
+`POST`: messages enter only through the consumers.
 
 ### Paging
 
@@ -419,7 +345,7 @@ that means nothing more than itself uses `about:blank`.
 ## MCP
 
 `cmd/mcp` serves the history to an agent as MCP tools (SDK `modelcontextprotocol/go-sdk`, streamable HTTP, no session kept, so any
-instance answers any call). It is a third binary beside the API and the consumer, on `mcp.port` (3200), over the same
+instance answers any call). It is a second binary beside the API, on `mcp.port` (3200), over the same
 Postgres. Like the API it has **no authentication**: an agent that reaches it can read any account, so it must not be deployed. It listens on
 `127.0.0.1` unless `MCP_HOST` says otherwise, so the PoC is not offered to the network by default (the API listens on every interface).
 
@@ -475,25 +401,15 @@ lists, each error, `/health`) contain no field the spec does not describe and no
 
 ## Concurrency
 
-Several writers meet in one database: consumers of different groups, a rebuild, the API reading. The
-rules that keep it correct are in the schema and the queries (the inbox primary key, `(conversation_id,
-sequence)`, upserts by position), and tests keep them correct as the code changes.
+The service reads; the writers are the consumers. The guards that remain are on the read side:
 
 | Guard | What it proves |
 |-------|----------------|
-| `TestConcurrentWriters` (real Postgres) | the same event from 30 writers is stored once; five consumers feeding the whole stream in five orders, and rebuilds running beside two consumers, leave the rows one writer leaves, the conversation summaries included |
-| `TestSummariesFollowTheMessages` (real Postgres) | eight writers on one conversation lose no count; twenty shuffled arrival orders give the same summary; a redelivery, a replay and an already stored message count once; a rebuild repairs a wrong count, a wrong time, a missing summary and a summary with no messages |
 | `TestServerAnswersTheSameWhenRequestsArriveAtOnce` | 64 requests over 8 routes at once answer as they do one at a time: the server holds no shared state |
-| service, projection, decoder, config guards | the same calls at once give the same results |
-| `TestConsumerCountersCanBeReadWhileItConsumes` | the consumer's counters can be read from another goroutine while it counts |
+| history service and config guards | the same calls at once give the same results |
 
 Each runs a scenario with every executor of `internal/testsupport/concurrent` (one task at a time, then all
 at once) and compares the outcomes. They fail under `-race` when shared state is introduced.
-
-**Two writers storing the same event.** The stream key, `(conversation_id, sequence)`, is the primary key and
-the `ON CONFLICT` target, so Postgres settles the race without an error: one writer inserts, the other sees
-`RowsAffected = 0`. `Apply` then compares the stored event with its own (name, version, payload and metadata,
-the JSON by value). Equal is a repeat and writes nothing; different is `ErrRejected`.
 
 Production code starts no goroutine outside `internal/core/async`, whose executor a test can swap, and a
 test does not wait with `time.Sleep`; `scripts/check-conventions.sh` enforces both. Nothing in the service
@@ -528,26 +444,20 @@ number that does not parse (`SERVER_PORT=abc`) fails the load with the field typ
 
 ## Privacy
 
-No message text, cursor, conversation id or account id reaches a log. The consumer names an event
-by its Kafka coordinates (`topic/partition/offset`) and logs counts; the API logs the route pattern
-and not the URL. Decode errors carry the coordinates, a reason and a field name. Database errors are
+No message text, cursor, conversation id or account id reaches a log. The API logs the route pattern
+and not the URL. Database errors are
 printed from their SQLSTATE, and from the server's message only for classes that cannot quote a value
 (connection, serialization, resources, operator shutdown); the detail, hint and context never are. A
 test with a secret in every part of the error pins this. The API has no authentication, so it must not
 be deployed.
 
-Only ids the API can serve are stored: `conversation_id` and `id_yape_account` must match
-`^[A-Za-z0-9._:-]{1,128}$`, the same rule the API applies to its parameters. A record outside it is
-skipped and counted as malformed, with the field name in the log.
+The API accepts ids that match `^[A-Za-z0-9._:-]{1,128}$` (conversation and account): anything else is a `400`.
 
 ## Operations
 
 | Task | How |
 |------|-----|
-| Recreate the messages and the conversation summaries | `go run ./cmd/consumer rebuild` |
-| Check the history against the event store, and the summaries against the messages | `local/scripts/verify.sh` (section 2b reports `summaries-differing-from-messages`; a rebuild repairs them) |
-| Deploy the conversation summaries | stop the consumer, apply migration `000003` (it fills the table from the messages stored), then start the new consumer and API. An old consumer running after the migration would store messages without counting them; a rebuild repairs that |
-| Events deleted from the tail of a live conversation and written again | the new events reuse old positions and the inbox refuses them (rejected, logged at error level). Delete whole, closed conversations only. To start over, drop the history tables (`make migrations/down CONFIRM=yes`, then `up`) and reset the consumer group offsets (`local/README.md`) |
+| Read the other schema (the old consumer's tables) | set `POSTGRES_SEARCH_PATH=camel_history` and restart the API |
+| Recreate the messages and the conversation summaries | the consumers' own tooling (this service no longer has a rebuild) |
 | Events deleted from the event store | not published; the history keeps its copy of the conversation. Clear it from the history too if the deletion is for erasure |
-| Replication slot lag | a stopped connector with a live slot makes Postgres keep WAL; drop the slot when the connector is retired for good (`ms-ml-genai-agents-bs/local/debezium/README.md`) |
-| Integration tests | `make it` and `make pipeline` start their own Postgres, Kafka, Schema Registry and Connect in Docker, on host ports picked free and with memory caps, and remove them at the end: they read and write nothing of the local cluster, so they leave no rows in its history. Earlier versions ran the pipeline tests against the local cluster and left the accounts `acc-pipeline` and `acc-slot` in the history of whoever had a consumer running; if you still have them, clean them with the testing plan's cleanup. A run killed before `TestMain` leaves containers labelled `conv-history-it`: `docker rm -f $(docker ps -aq --filter label=conv-history-it)` |
+| Integration tests | `make it` starts its own Postgres in Docker, on a host port picked free and with a memory cap, and removes it at the end: it reads and writes nothing of the local cluster |

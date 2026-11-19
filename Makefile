@@ -1,4 +1,4 @@
-# ms-ml-conv-history-bs: three binaries (cmd/api, cmd/consumer, cmd/mcp).
+# ms-ml-conv-history-bs: two binaries (cmd/api, cmd/mcp). The history is written by the Camel consumers.
 # Mocks come from //go:generate directives next to each port; `make mocks` only runs them.
 
 GO ?= go
@@ -21,11 +21,10 @@ PACKAGES = $$($(GO) list ./internal/... | grep -v -e /mocks -e '/testsupport$$')
 help:
 	@sed -n 's/^##//p' $(MAKEFILE_LIST) | column -t -s ':' | sed -e 's/^/ /'
 
-## build: build the three binaries into ./bin
+## build: build the two binaries into ./bin
 .PHONY: build
 build:
 	$(GO) build -o bin/api ./cmd/api
-	$(GO) build -o bin/consumer ./cmd/consumer
 	$(GO) build -o bin/mcp ./cmd/mcp
 
 ## test: clean the test cache and run every package suite
@@ -47,17 +46,11 @@ cover:
 	@$(GO) test -cover $(PACKAGES) | tee coverage.out
 	@awk -v min=$(MIN_COVERAGE) '/coverage:/ { gsub("%","",$$5); if ($$5+0 < min) { print "FAIL " $$2 " is at " $$5 "%, under " min "%"; bad=1 } } END { exit bad }' coverage.out
 
-## it: integration tests. They start what they need in Docker (Postgres, and for the pipeline tests Kafka, Schema Registry and Connect with Debezium) and touch nothing else on the machine
+## it: integration tests. They start a throwaway Postgres in Docker and touch nothing else on the machine
 .PHONY: it
 it:
 	$(GO) clean -testcache
 	$(GO) test -v -timeout 20m ./it/...
-
-## pipeline: only the pipeline tests (Kafka, Schema Registry, Connect with the Debezium connector and Postgres, all started in Docker); the quick way to iterate on the consumer
-.PHONY: pipeline
-pipeline:
-	$(GO) clean -testcache
-	$(GO) test -v -timeout 20m -run TestPipeline ./it/history
 
 ## openapi: regenerate docs/ms-ml-conv-history-bs-openapi.yml from the swag annotations
 .PHONY: openapi

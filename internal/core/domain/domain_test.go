@@ -7,40 +7,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestInboxEventRef(t *testing.T) {
-	tests := []struct {
-		name  string
-		event InboxEvent
-		want  string
-	}{
-		{name: "kafkaCoordinates", event: InboxEvent{KafkaTopic: "yape.public.conversation_events", KafkaPartition: 2, KafkaOffset: 41}, want: "yape.public.conversation_events/2/41"},
-		{name: "zeroValue", event: InboxEvent{}, want: "/0/0"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, tt.event.Ref())
-		})
-	}
-}
-
-// The reference names where the record sits in Kafka and nothing else: no
-// conversation id, account, correlation id, payload or metadata reaches a log
-// through it.
-func TestInboxEventRefCarriesNoContent(t *testing.T) {
-	event := InboxEvent{
-		ConversationID: "conv-secret", Sequence: 1, Payload: []byte(`{"text":"card 4111"}`),
-		Metadata: []byte(`{"secret":"x"}`), IDYapeAccount: "acc-1", CorrelationID: "corr-1",
-		KafkaTopic: "t", KafkaPartition: 1, KafkaOffset: 7,
-	}
-
-	ref := event.Ref()
-
-	for _, leaked := range []string{"conv-secret", "4111", "secret", "acc-1", "corr-1"} {
-		assert.False(t, strings.Contains(ref, leaked), "the reference leaked %q", leaked)
-	}
-}
-
 func TestValidFlow(t *testing.T) {
 	tests := []struct {
 		name string

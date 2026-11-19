@@ -36,7 +36,7 @@ type healthResponse struct {
 type Pinger func(ctx context.Context) error
 
 // NewServer returns the router: the two history routes and /health. It has no
-// authentication (PoC only) and publishes nothing to Kafka.
+// authentication (PoC only).
 func NewServer(history service.History, log Logger, ping Pinger) *echo.Echo {
 	return newServer(history, log, ping, requestTimeout)
 }

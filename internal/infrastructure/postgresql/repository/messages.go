@@ -219,3 +219,12 @@ func conversationsQuery(q domain.ConversationQuery) (string, []any, error) {
 
 	return "", nil, fmt.Errorf("list conversations: unknown direction %q", q.Direction)
 }
+
+// value reads a nullable text column; NULL is the empty string.
+func value(s *string) string {
+	if s == nil {
+		return ""
+	}
+
+	return *s
+}

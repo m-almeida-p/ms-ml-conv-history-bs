@@ -21,7 +21,7 @@ status=0
 
 # Files that may start goroutines or sleep, for a stated reason.
 GO_ALLOWED='^(internal/core/async/executor\.go|internal/testsupport/concurrent/concurrent\.go|cmd/.*)$'
-SLEEP_ALLOWED='^(it/history/kafka_helpers_test\.go)$'
+SLEEP_ALLOWED='^(it/history/binary_test\.go)$'
 
 files=$(find internal cmd it -type f -name '*.go' 2>/dev/null | sort)
 [ -n "$files" ] || { echo "check-conventions: no Go sources found, refusing to pass" >&2; exit 2; }

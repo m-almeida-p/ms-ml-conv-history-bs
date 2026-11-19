@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/yaperos/ms-ml-conv-history-bs/internal/core/domain"
-	"github.com/yaperos/ms-ml-conv-history-bs/internal/core/projection"
 	"github.com/yaperos/ms-ml-conv-history-bs/internal/infrastructure/postgresql/repository"
 )
 
@@ -32,8 +32,9 @@ type attempt struct {
 	resolveAfter time.Duration
 }
 
-// play writes the attempt through the projection, as the consumer does, and returns how many events it wrote.
-func play(t *testing.T, repo *repository.PostgresInboxRepository, projector *projection.Service, a attempt) {
+// play writes the attempt as the consumer left it: every event in the inbox, and the chat messages (the user's and
+// the agent's text) in the messages table. It is plain SQL, because the writing is done by the Camel consumers now.
+func play(t *testing.T, pool *pgxpool.Pool, a attempt) {
 	t.Helper()
 
 	type step struct {
@@ -82,23 +83,21 @@ func play(t *testing.T, repo *repository.PostgresInboxRepository, projector *pro
 	for i, s := range steps {
 		payload, err := json.Marshal(s.payload)
 		require.NoError(t, err)
-		event := domain.InboxEvent{
-			ConversationID: a.conversation,
-			Sequence:       i + 1,
-			EventName:      s.name,
-			EventVersion:   1,
-			Payload:        payload,
-			Metadata:       json.RawMessage(`{}`),
-			CorrelationID:  "corr",
-			IDYapeAccount:  a.account,
-			Actor:          s.actor,
-			Flow:           s.flow,
-			OccurredAt:     a.start.Add(s.at),
-			KafkaTopic:     "yape.public.conversation_events",
-		}
-		message, err := projector.Project(event)
+		_, err = pool.Exec(ctx, `
+			INSERT INTO conversation_inbox (conversation_id, sequence, event_name, event_version, payload, metadata, correlation_id,
+			                                id_yape_account, actor, flow, occurred_at, kafka_topic, kafka_partition, kafka_offset)
+			VALUES ($1, $2, $3, 1, $4, '{}', 'corr', $5, $6, NULLIF($7, ''), $8, 'yape.event_store.conversation_events', 0, 0)`,
+			a.conversation, i+1, s.name, payload, a.account, s.actor, s.flow, a.start.Add(s.at))
 		require.NoError(t, err)
-		_, err = repo.Apply(ctx, event, message)
+
+		role := map[string]string{"UserMessageSent": "appUser", "AgentMessageSent": "appMaker"}[s.name]
+		if role == "" {
+			continue
+		}
+		_, err = pool.Exec(ctx, `
+			INSERT INTO conversation_messages (conversation_id, sequence, role, author_id, text, event_name, id_yape_account, flow, occurred_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, NULLIF($8, ''), $9)`,
+			a.conversation, i+1, role, s.actor, s.payload["text"], s.name, a.account, s.flow, a.start.Add(s.at))
 		require.NoError(t, err)
 	}
 }
@@ -108,8 +107,6 @@ func play(t *testing.T, repo *repository.PostgresInboxRepository, projector *pro
 func TestInsights(t *testing.T) {
 	pool, _ := newHistoryDB(t)
 	ctx := context.Background()
-	inbox := repository.NewPostgresInboxRepository(pool)
-	projector := projection.NewService(inbox)
 	insights := repository.NewPostgresInsightsRepository(pool)
 
 	now := time.Now().UTC().Truncate(time.Second)
@@ -132,8 +129,9 @@ func TestInsights(t *testing.T) {
 		{account: "acc-b", conversation: "conv-b-pay", start: now.Add(-30 * time.Minute), decision: "approved", cardAfter: 40 * time.Second, resolveAfter: 2 * time.Second},
 	}
 	for _, a := range attempts {
-		play(t, inbox, projector, a)
+		play(t, pool, a)
 	}
+	refreshSummaries(t, pool)
 
 	t.Run("accountsAreListedMostRecentlyActiveFirstWithTheirCounts", func(t *testing.T) {
 		got, err := insights.ListAccounts(ctx, domain.AccountQuery{Size: 10})
@@ -227,7 +225,8 @@ func TestInsights(t *testing.T) {
 
 	t.Run("anAttemptThatNeverGotADecisionHasNoResolutionTime", func(t *testing.T) {
 		only := attempt{account: "acc-c", conversation: "conv-c-card", start: recent, cardAfter: 25 * time.Second}
-		play(t, inbox, projector, only)
+		play(t, pool, only)
+		refreshSummaries(t, pool) // the statements reach the inbox through the summaries
 
 		got, err := insights.LatencyGroups(ctx, query("acc-c", now.AddDate(0, 0, -30)))
 

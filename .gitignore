@@ -1,13 +1,12 @@
 # Binaries
 /api
-/consumer
 /bin/
 
 # Test and coverage output
 coverage.out
 coverage
 
-# Local run scripts (scripts/run_*.sh): their logs and the consumer's pid file
+# Local run scripts (scripts/run_*.sh): their logs and pid files
 *.log
 *.pid
 scripts/logs/

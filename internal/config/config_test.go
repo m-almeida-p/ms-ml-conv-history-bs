@@ -18,9 +18,8 @@ const repoConfig = "../../config.yaml"
 var envKeys = []string{
 	"SERVER_PORT", "MCP_HOST", "MCP_PORT",
 	"POSTGRES_DSN", "POSTGRES_HOST", "POSTGRES_PORT", "POSTGRES_USER", "POSTGRES_PASSWORD",
-	"POSTGRES_DB", "POSTGRES_SSL_MODE", "POSTGRES_MAX_CONNS", "POSTGRES_MIN_CONNS",
+	"POSTGRES_DB", "POSTGRES_SSL_MODE", "POSTGRES_SEARCH_PATH", "POSTGRES_MAX_CONNS", "POSTGRES_MIN_CONNS",
 	"POSTGRES_CONN_MAX_LIFETIME", "POSTGRES_CONN_MAX_IDLE_TIME", "POSTGRES_CONNECT_TIMEOUT",
-	"KAFKA_CLIENT_BROKERS", "KAFKA_TOPIC_EVENTS", "KAFKA_GROUP_ID", "KAFKA_AUTO_OFFSET_RESET",
 	"LOG_LEVEL",
 }
 
@@ -70,11 +69,6 @@ func TestLoad(t *testing.T) {
 			Host: "localhost", Port: 5432, User: "postgres", Database: "postgres", SSLMode: "disable", SearchPath: "history",
 			MaxConns: 10, MinConns: 2, ConnMaxLifetimeSeconds: 3600, ConnMaxIdleTimeSeconds: 300, ConnectTimeoutSeconds: 10,
 		},
-		Kafka: KafkaConfig{
-			Brokers: "localhost:9092", Topic: "yape.public.conversation_events",
-			GroupID: "ms-ml-conv-history-bs", AutoOffsetReset: "earliest",
-			MaxPollIntervalMs: 300000, SessionTimeoutMs: 45000,
-		},
 		Logging: LoggingConfig{Level: "info"},
 	}
 
@@ -89,8 +83,7 @@ func TestLoad(t *testing.T) {
 			name: "environmentOverrides",
 			env: map[string]string{
 				"SERVER_PORT": "8080", "MCP_HOST": "0.0.0.0", "MCP_PORT": "9000", "POSTGRES_HOST": "db", "POSTGRES_PASSWORD": "secret", "POSTGRES_MAX_CONNS": "20",
-				"KAFKA_CLIENT_BROKERS": "kafka:29092", "KAFKA_AUTO_OFFSET_RESET": "latest", "LOG_LEVEL": "debug",
-				"KAFKA_MAX_POLL_INTERVAL_MS": "20000", "KAFKA_SESSION_TIMEOUT_MS": "6000",
+				"LOG_LEVEL": "debug",
 			},
 			want: func(c Config) Config {
 				c.Server.Port = 8080
@@ -99,10 +92,6 @@ func TestLoad(t *testing.T) {
 				c.Postgres.Host = "db"
 				c.Postgres.Password = "secret"
 				c.Postgres.MaxConns = 20
-				c.Kafka.Brokers = "kafka:29092"
-				c.Kafka.AutoOffsetReset = "latest"
-				c.Kafka.MaxPollIntervalMs = 20000
-				c.Kafka.SessionTimeoutMs = 6000
 				c.Logging.Level = "debug"
 				return c
 			},
@@ -128,14 +117,6 @@ func TestLoad(t *testing.T) {
 		{name: "postgresConnectTimeoutZero", env: map[string]string{"POSTGRES_CONNECT_TIMEOUT": "0"}, wantErr: "connect_timeout_seconds"},
 		{name: "postgresLifetimeNegative", env: map[string]string{"POSTGRES_CONN_MAX_LIFETIME": "-1"}, wantErr: "conn_max_lifetime_seconds"},
 		{name: "postgresIdleTimeNegative", env: map[string]string{"POSTGRES_CONN_MAX_IDLE_TIME": "-1"}, wantErr: "conn_max_idle_time_seconds"},
-		{name: "kafkaOffsetResetUnknown", env: map[string]string{"KAFKA_AUTO_OFFSET_RESET": "middle"}, wantErr: "kafka.auto_offset_reset"},
-		{name: "kafkaSessionTimeoutBelowOneSecond", env: map[string]string{"KAFKA_SESSION_TIMEOUT_MS": "500"}, wantErr: "kafka.session_timeout_ms"},
-		{name: "kafkaSessionTimeoutNegative", env: map[string]string{"KAFKA_SESSION_TIMEOUT_MS": "-1"}, wantErr: "kafka.session_timeout_ms"},
-		{name: "kafkaPollIntervalBelowTheSessionTimeout", env: map[string]string{"KAFKA_SESSION_TIMEOUT_MS": "20000", "KAFKA_MAX_POLL_INTERVAL_MS": "10000"}, wantErr: "kafka.max_poll_interval_ms"},
-		{name: "kafkaPollIntervalEqualToTheSessionTimeoutIsAllowed", env: map[string]string{"KAFKA_SESSION_TIMEOUT_MS": "10000", "KAFKA_MAX_POLL_INTERVAL_MS": "10000"}, want: func(c Config) Config {
-			c.Kafka.SessionTimeoutMs, c.Kafka.MaxPollIntervalMs = 10000, 10000
-			return c
-		}},
 		{name: "logLevelUnknown", env: map[string]string{"LOG_LEVEL": "loud"}, wantErr: "logging.level"},
 	}
 
@@ -161,7 +142,7 @@ func TestLoad(t *testing.T) {
 }
 
 func TestLoadFromContent(t *testing.T) {
-	const validKafka = "kafka:\n  brokers: b:9092\n  topic: t\n  group_id: g\n  auto_offset_reset: earliest\n  max_poll_interval_ms: 300000\n  session_timeout_ms: 45000\nlogging:\n  level: info\n"
+	const validLogging = "logging:\n  level: info\n"
 
 	tests := []struct {
 		name    string
@@ -171,31 +152,16 @@ func TestLoadFromContent(t *testing.T) {
 	}{
 		{name: "fileMissing", missing: true, wantErr: "read config"},
 		{name: "yamlInvalid", content: "server: [unclosed", wantErr: "parse config"},
-		{name: "noDSNNoHost", content: "server:\n  port: 1\npostgres:\n  port: 5432\n" + validKafka, wantErr: "postgres.host"},
+		{name: "noDSNNoHost", content: "server:\n  port: 1\npostgres:\n  port: 5432\n" + validLogging, wantErr: "postgres.host"},
 		{
 			name:    "noDSNNoUser",
-			content: "server:\n  port: 1\npostgres:\n  host: h\n  port: 5432\n" + validKafka,
+			content: "server:\n  port: 1\npostgres:\n  host: h\n  port: 5432\n" + validLogging,
 			wantErr: "postgres.user",
 		},
 		{
 			name:    "noDSNNoDatabase",
-			content: "server:\n  port: 1\npostgres:\n  host: h\n  port: 5432\n  user: u\n" + validKafka,
+			content: "server:\n  port: 1\npostgres:\n  host: h\n  port: 5432\n  user: u\n" + validLogging,
 			wantErr: "postgres.database",
-		},
-		{
-			name:    "kafkaBrokersMissing",
-			content: "server:\n  port: 1\npostgres:\n  dsn: postgres://h/d\n  max_conns: 1\n  connect_timeout_seconds: 1\nkafka:\n  topic: t\n  group_id: g\n  auto_offset_reset: earliest\n  max_poll_interval_ms: 300000\n  session_timeout_ms: 45000\nlogging:\n  level: info\n",
-			wantErr: "kafka.brokers",
-		},
-		{
-			name:    "kafkaTopicMissing",
-			content: "server:\n  port: 1\npostgres:\n  dsn: postgres://h/d\n  max_conns: 1\n  connect_timeout_seconds: 1\nkafka:\n  brokers: b\n  group_id: g\n  auto_offset_reset: earliest\n  max_poll_interval_ms: 300000\n  session_timeout_ms: 45000\nlogging:\n  level: info\n",
-			wantErr: "kafka.topic",
-		},
-		{
-			name:    "kafkaGroupIDMissing",
-			content: "server:\n  port: 1\npostgres:\n  dsn: postgres://h/d\n  max_conns: 1\n  connect_timeout_seconds: 1\nkafka:\n  brokers: b\n  topic: t\n  auto_offset_reset: earliest\n  max_poll_interval_ms: 300000\n  session_timeout_ms: 45000\nlogging:\n  level: info\n",
-			wantErr: "kafka.group_id",
 		},
 	}
 
@@ -261,14 +227,14 @@ func TestLoadTakesEnvironmentValuesAsTheyAre(t *testing.T) {
 			clearEnv(t)
 			t.Setenv("POSTGRES_PASSWORD", want)
 			t.Setenv("POSTGRES_DSN", want)
-			t.Setenv("KAFKA_GROUP_ID", want)
+			t.Setenv("POSTGRES_SEARCH_PATH", want)
 
 			got, err := Load(repoConfig)
 
 			require.NoError(t, err)
 			assert.Equal(t, want, got.Postgres.Password)
 			assert.Equal(t, want, got.Postgres.DSN)
-			assert.Equal(t, want, got.Kafka.GroupID)
+			assert.Equal(t, want, got.Postgres.SearchPath)
 		})
 	}
 }
@@ -334,12 +300,11 @@ func TestLoadAnEmptyOrNonMappingFile(t *testing.T) {
 
 func TestLoadDefaultsAreSubjectToTheSameRules(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	content := "server:\n  port: ${SPEC_PORT:-3100}\npostgres:\n  dsn: ${SPEC_DSN:-postgres://u:p@h/d?x=a#b}\n  max_conns: 1\n  connect_timeout_seconds: 1\n" +
-		"kafka:\n  brokers: b:9092\n  topic: ${SPEC_TOPIC:-null}\n  group_id: g\n  auto_offset_reset: earliest\n  max_poll_interval_ms: 300000\n  session_timeout_ms: 45000\nlogging:\n  level: info\n"
+	content := "server:\n  port: ${SPEC_PORT:-3100}\npostgres:\n  dsn: ${SPEC_DSN:-postgres://u:p@h/d?x=a#b}\n  max_conns: 1\n  connect_timeout_seconds: 1\n  search_path: ${SPEC_SEARCH:-null}\nlogging:\n  level: info\n"
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 	t.Setenv("SPEC_PORT", "")
 	t.Setenv("SPEC_DSN", "")
-	t.Setenv("SPEC_TOPIC", "")
+	t.Setenv("SPEC_SEARCH", "")
 
 	got, err := Load(path)
 
@@ -347,35 +312,7 @@ func TestLoadDefaultsAreSubjectToTheSameRules(t *testing.T) {
 	assert.Equal(t, 3100, got.Server.Port)
 	assert.Zero(t, got.MCP.Port, "a file without an mcp section loads: only cmd/mcp needs the port")
 	assert.Equal(t, "postgres://u:p@h/d?x=a#b", got.Postgres.DSN, "a default with a # is not a comment")
-	assert.Equal(t, "null", got.Kafka.Topic, "a default of null is the text null")
-}
-
-// auto.offset.reset=latest is allowed, for starting at the end of a topic on
-// purpose, but it silently skips history when committed offsets are lost, and the
-// inbox is the only durable copy. The consumer says so at startup.
-func TestKafkaWarnings(t *testing.T) {
-	tests := []struct {
-		name   string
-		reset  string
-		wantIn string // empty: no warning
-	}{
-		{name: "earliestIsSilent", reset: "earliest"},
-		{name: "latestWarns", reset: "latest", wantIn: "kafka.auto_offset_reset is latest"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			warnings := KafkaConfig{AutoOffsetReset: tt.reset}.Warnings()
-
-			if tt.wantIn == "" {
-				assert.Empty(t, warnings)
-				return
-			}
-			require.Len(t, warnings, 1)
-			assert.Contains(t, warnings[0], tt.wantIn)
-			assert.Contains(t, warnings[0], "history")
-		})
-	}
+	assert.Equal(t, "null", got.Postgres.SearchPath, "a default of null is the text null")
 }
 
 func TestMCPAddr(t *testing.T) {

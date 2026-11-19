@@ -3,7 +3,6 @@
 package domain
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -22,30 +21,6 @@ const (
 	RoleMaker Role = "appMaker"
 )
 
-const (
-	// MakerAuthorID is the author of every appMaker message.
-	MakerAuthorID = "ms-ml-genai-agent-bs"
-	// MessageTypeText is the only message type for now.
-	MessageTypeText = "text"
-)
-
-// Event names that become chat messages.
-const (
-	EventUserMessageSent       = "UserMessageSent"
-	EventAgentMessageSent      = "AgentMessageSent"
-	EventGuardrailResponseSent = "GuardrailResponseSent"
-)
-
-// ErrInvalidEvent marks an event that should project but lacks what the
-// projection needs, such as its text. Wrap it with the reason.
-var ErrInvalidEvent = errors.New("invalid event")
-
-// ErrRejected marks an event the store refuses for good, such as a violated
-// constraint or a stream position that already holds another event. Trying again
-// cannot help, so a consumer skips it. The error carries the constraint name and
-// code, never the row.
-var ErrRejected = errors.New("event rejected by the store")
-
 // flowName is what a flow is called in the event store: lower-case words joined by
 // underscores, such as p2p or bill_payment.
 var flowName = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
@@ -53,36 +28,6 @@ var flowName = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 // ValidFlow reports whether name can be a flow.
 func ValidFlow(name string) bool {
 	return flowName.MatchString(name)
-}
-
-// InboxEvent is one conversation_events row as it arrived from Kafka. Its stream
-// position, ConversationID and Sequence, is its identity. Payload and Metadata
-// hold JSON. An absent CorrelationID, IDYapeAccount or Actor is the empty string.
-type InboxEvent struct {
-	ConversationID string
-	Sequence       int
-	EventName      string
-	EventVersion   int
-	Payload        json.RawMessage
-	Metadata       json.RawMessage
-	CorrelationID  string
-	IDYapeAccount  string
-	Actor          string
-	// Flow is the flow the fact took place in, such as p2p, or empty outside any flow.
-	Flow       string
-	OccurredAt time.Time
-
-	// Where the record came from, kept for audit only.
-	KafkaTopic     string
-	KafkaPartition int32
-	KafkaOffset    int64
-}
-
-// Ref names the event by where its record sits in Kafka, for logs and errors.
-// The coordinates find the record; no conversation id, account or content is in
-// them, so they are safe to log.
-func (e InboxEvent) Ref() string {
-	return fmt.Sprintf("%s/%d/%d", e.KafkaTopic, e.KafkaPartition, e.KafkaOffset)
 }
 
 // identifier is what a conversation id or an account id may look like. The
@@ -108,28 +53,6 @@ type Message struct {
 	// Flow is the flow the message took place in, or empty outside any flow.
 	Flow       string
 	OccurredAt time.Time
-}
-
-// ApplyResult tells what Apply did with an event.
-type ApplyResult struct {
-	// Applied is false when the event was received before and nothing was written.
-	Applied bool
-	// Projected is true when the event also added a chat message.
-	Projected bool
-	// Invalid is true when the event should have projected but could not. It is
-	// stored in the inbox without a message.
-	Invalid bool
-}
-
-// RebuildResult counts what a rebuild did.
-type RebuildResult struct {
-	// Events is how many inbox events were replayed.
-	Events int
-	// Messages is how many chat messages were written.
-	Messages int
-	// Invalid is how many events should have projected but could not. They stay
-	// in the inbox and add no message.
-	Invalid int
 }
 
 // PageSize is how many messages a page holds when the client does not ask for
