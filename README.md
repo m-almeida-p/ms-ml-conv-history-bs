@@ -103,7 +103,7 @@ a tool can read any account. `list_accounts` is how it finds the ids. `docs/desi
 
 ## Configuration
 
-`config.yaml` expands `${VAR:-default}`; a local `.env` (git-ignored) can set the variables.
+`config.yaml` expands `${VAR:-default}`; `.env` (committed: it holds only the local development values) can set the variables; other `.env.*` files are git-ignored.
 
 | Variable | Default |
 |----------|---------|

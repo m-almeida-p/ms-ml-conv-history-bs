@@ -11,8 +11,8 @@ coverage
 *.pid
 scripts/logs/
 
-# Local settings: never commit
-.env
+# .env holds only the local development values (the local database password, the schema) and is committed.
+# Any other .env.* file stays out, so a real environment's settings are never committed by accident.
 .env.*
 !.env.example
 

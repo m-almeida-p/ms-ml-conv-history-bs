@@ -9,7 +9,7 @@ start the cluster and one of them first. This service only reads.
 ./scripts/run_mcp.sh      # :3200, GET /health
 ```
 
-Settings come from `config.yaml`; a local `.env` (git-ignored in the template, committed here with the local values only) can
+Settings come from `config.yaml`; `.env` (committed, with the local development values only) can
 override them. The one that matters here is the schema:
 
 | Variable | Default |
