@@ -122,6 +122,7 @@ a tool can read any account. `list_accounts` is how it finds the ids. `docs/desi
 | `POSTGRES_DSN` | empty; when set it wins over the fields below |
 | `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | `localhost`, `5432`, `postgres`, empty, `postgres` |
 | `POSTGRES_SSL_MODE` | `disable` |
+| `POSTGRES_SEARCH_PATH` | `history`, the tables the Camel consumers fill; `camel_history` is the old consumer's; empty keeps the database user's own. With `POSTGRES_DSN`, put `search_path` in the DSN |
 | `POSTGRES_MAX_CONNS`, `POSTGRES_MIN_CONNS` | `10`, `2` |
 | `POSTGRES_CONN_MAX_LIFETIME`, `POSTGRES_CONN_MAX_IDLE_TIME`, `POSTGRES_CONNECT_TIMEOUT` | `3600`, `300`, `10` (seconds) |
 | `KAFKA_CLIENT_BROKERS` | `localhost:9092` |

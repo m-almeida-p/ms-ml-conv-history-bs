@@ -18,6 +18,9 @@ postgres:
   password: ${POSTGRES_PASSWORD:-}
   database: ${POSTGRES_DB:-postgres}
   ssl_mode: ${POSTGRES_SSL_MODE:-disable}
+  # The schema the tables are in: history, which the Camel consumers fill (camel_history is the old consumer's).
+  # Set it empty to keep the database user's own search_path.
+  search_path: ${POSTGRES_SEARCH_PATH:-history}
   max_conns: ${POSTGRES_MAX_CONNS:-10}
   min_conns: ${POSTGRES_MIN_CONNS:-2}
   conn_max_lifetime_seconds: ${POSTGRES_CONN_MAX_LIFETIME:-3600}

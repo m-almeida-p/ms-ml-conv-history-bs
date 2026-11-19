@@ -55,13 +55,16 @@ func (c MCPConfig) Addr() string {
 // PostgresConfig configures the pool. DSN, when set, wins over the discrete
 // connection fields.
 type PostgresConfig struct {
-	DSN                    string `yaml:"dsn"`
-	Host                   string `yaml:"host"`
-	Port                   int    `yaml:"port"`
-	User                   string `yaml:"user"`
-	Password               string `yaml:"password"`
-	Database               string `yaml:"database"`
-	SSLMode                string `yaml:"ssl_mode"`
+	DSN      string `yaml:"dsn"`
+	Host     string `yaml:"host"`
+	Port     int    `yaml:"port"`
+	User     string `yaml:"user"`
+	Password string `yaml:"password"`
+	Database string `yaml:"database"`
+	SSLMode  string `yaml:"ssl_mode"`
+	// SearchPath is the schema (or comma-separated schemas) the unqualified table names are read from. Empty
+	// keeps the database user's own search_path. With a DSN, put search_path in the DSN instead.
+	SearchPath             string `yaml:"search_path"`
 	MaxConns               int    `yaml:"max_conns"`
 	MinConns               int    `yaml:"min_conns"`
 	ConnMaxLifetimeSeconds int    `yaml:"conn_max_lifetime_seconds"`

@@ -41,6 +41,19 @@ func TestBuildDSN(t *testing.T) {
 			want:   "postgres://app:p%40ss%2Fword%3A1@db:5432/history?sslmode=disable",
 		},
 		{
+			name:   "searchPathNamesTheSchemaTheTablesAreIn",
+			mutate: func(c *config.PostgresConfig) { c.SearchPath = "history" },
+			want:   "postgres://app:p%40ss%2Fword%3A1@db:5432/history?connect_timeout=10&search_path=history&sslmode=disable",
+		},
+		{
+			name: "searchPathIsLeftToTheDsnWhenThereIsOne",
+			mutate: func(c *config.PostgresConfig) {
+				c.DSN = "postgres://other/db?search_path=history"
+				c.SearchPath = "ignored"
+			},
+			want: "postgres://other/db?search_path=history",
+		},
+		{
 			name:   "dsnWinsAndIsTrimmed",
 			mutate: func(c *config.PostgresConfig) { c.DSN = "  postgres://other/db  " },
 			want:   "postgres://other/db",

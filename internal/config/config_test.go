@@ -67,7 +67,7 @@ func TestLoad(t *testing.T) {
 		Server: ServerConfig{Port: 3100},
 		MCP:    MCPConfig{Host: "127.0.0.1", Port: 3200},
 		Postgres: PostgresConfig{
-			Host: "localhost", Port: 5432, User: "postgres", Database: "postgres", SSLMode: "disable",
+			Host: "localhost", Port: 5432, User: "postgres", Database: "postgres", SSLMode: "disable", SearchPath: "history",
 			MaxConns: 10, MinConns: 2, ConnMaxLifetimeSeconds: 3600, ConnMaxIdleTimeSeconds: 300, ConnectTimeoutSeconds: 10,
 		},
 		Kafka: KafkaConfig{

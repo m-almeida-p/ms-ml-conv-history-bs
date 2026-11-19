@@ -38,6 +38,9 @@ func BuildDSN(cfg config.PostgresConfig) string {
 
 	query := url.Values{}
 	query.Set("sslmode", cfg.SSLMode)
+	if searchPath := strings.TrimSpace(cfg.SearchPath); searchPath != "" {
+		query.Set("search_path", searchPath)
+	}
 	if cfg.ConnectTimeoutSeconds > 0 {
 		query.Set("connect_timeout", strconv.Itoa(cfg.ConnectTimeoutSeconds))
 	}
