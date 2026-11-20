@@ -9,14 +9,16 @@ import (
 	"github.com/yaperos/ms-ml-conv-history-bs/internal/core/port/service"
 )
 
-// Messages handles GET /v1/conversations/{conversationId}/messages, with the
+// Messages handles GET /v1/conversations/{conversationId}/messages?idYapeAccount=, with the
 // cursors page[before] and page[after] (at most one) and the page size page[size].
+// A conversation is read for an account: one that belongs to another is not found.
 // The body holds the messages only; the way to the next page is the Link header.
 //
 // @Summary List the messages of a conversation
 // @Description Returns up to 100 chat messages, oldest first. Without a cursor it returns the newest page. page[before] returns the messages just older than the given message, page[after] the ones just newer. Send at most one of them, once, with a message _id of this conversation. page[size] (1 to 100, default 100) says how many. The body holds only the conversation and its messages; more pages are announced in the Link header: rel="prev" (older messages) on the newest and before pages, rel="next" (newer messages) on after pages, present only when there are more. The last page has no Link header. A page past the last message is an empty array.
 // @Tags Messages
 // @Param conversationId path string true "Conversation id (letters, digits, . _ : -, up to 128 characters)"
+// @Param idYapeAccount query string true "Customer account the conversation belongs to (letters, digits, . _ : -, up to 128 characters), sent once. A conversation of another account is not found"
 // @Param page[before] query string false "Message _id: read the page of messages older than it"
 // @Param page[after] query string false "Message _id: read the page of messages newer than it"
 // @Param page[size] query int false "How many messages the page holds, from 1 to 100 (default 100); the Link header repeats it when it is not the default" minimum(1) maximum(100) default(100)
@@ -29,22 +31,29 @@ import (
 // @Failure 500 {object} problemResponse "Problem details (RFC 9457), type about:blank"
 // @Router /v1/conversations/{conversationId}/messages [get]
 func (h *Handler) Messages(c echo.Context) error {
-	params, err := queryParams(c, "page[before]", "page[after]", "page[size]")
+	params, err := queryParams(c, "idYapeAccount", "page[before]", "page[after]", "page[size]")
 	if err != nil {
 		return h.fail(c, err)
 	}
 
+	// A missing account is the service's to refuse, like a malformed one.
+	var idYapeAccount string
+	if params[0] != nil {
+		idYapeAccount = *params[0]
+	}
+
 	page, err := h.history.Messages(c.Request().Context(), service.MessagesRequest{
+		IDYapeAccount:  idYapeAccount,
 		ConversationID: c.Param("conversationId"),
-		Before:         params[0],
-		After:          params[1],
-		Size:           params[2],
+		Before:         params[1],
+		After:          params[2],
+		Size:           params[3],
 	})
 	if err != nil {
 		return h.fail(c, err)
 	}
 
-	if link := continuation(page); link != "" {
+	if link := continuation(idYapeAccount, page); link != "" {
 		c.Response().Header().Set("Link", link)
 	}
 
@@ -55,17 +64,18 @@ func (h *Handler) Messages(c echo.Context) error {
 // read: rel="next" after a page read forward, rel="prev" after one read backward.
 // It is empty on the last page. The page size is repeated when it is not the default,
 // so following the link keeps the size the client chose.
-func continuation(page domain.MessagePage) string {
+func continuation(idYapeAccount string, page domain.MessagePage) string {
 	// The conversation id comes from the request and goes into a header unescaped. The service has
 	// validated it, and this keeps the link safe even if that ever changes.
-	if !page.HasMore || !domain.ValidIdentifier(page.ConversationID) {
+	// The account goes into it too, so that following the link reads for the same account; it has been validated as well.
+	if !page.HasMore || !domain.ValidIdentifier(page.ConversationID) || !domain.ValidIdentifier(idYapeAccount) {
 		return ""
 	}
 
-	target := "/v1/conversations/" + page.ConversationID + "/messages?page[before]=" + page.BeforeCursor
+	target := "/v1/conversations/" + page.ConversationID + "/messages?idYapeAccount=" + idYapeAccount + "&page[before]=" + page.BeforeCursor
 	rel := "prev"
 	if page.Direction == domain.DirectionAfter {
-		target = "/v1/conversations/" + page.ConversationID + "/messages?page[after]=" + page.AfterCursor
+		target = "/v1/conversations/" + page.ConversationID + "/messages?idYapeAccount=" + idYapeAccount + "&page[after]=" + page.AfterCursor
 		rel = "next"
 	}
 	if page.Size != domain.PageSize {

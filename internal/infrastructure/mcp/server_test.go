@@ -147,7 +147,7 @@ func TestTheAccountIsAnArgumentTheModelMustGive(t *testing.T) {
 		required[tool.Name] = strings.Contains(string(schema), `"required":["id_yape_account"`)
 	}
 	assert.Equal(t, map[string]bool{
-		"list_accounts": false, "get_recent_conversations": true, "get_transcript": false,
+		"list_accounts": false, "get_recent_conversations": true, "get_transcript": true,
 		"get_activity_funnel": true, "get_latency_stats": true, "get_tool_health": true,
 	}, required)
 }
@@ -218,7 +218,7 @@ func TestEveryTimeIsInUTC(t *testing.T) {
 	for tool, args := range map[string]map[string]any{
 		"list_accounts":            nil,
 		"get_recent_conversations": {"id_yape_account": "acc-1"},
-		"get_transcript":           {"conversation_id": "conv_v1_a"},
+		"get_transcript":           {"id_yape_account": "acc-1", "conversation_id": "conv_v1_a"},
 		"get_activity_funnel":      {"id_yape_account": "acc-1"},
 		"get_latency_stats":        {"id_yape_account": "acc-1"},
 		"get_tool_health":          {"id_yape_account": "acc-1"},
@@ -273,7 +273,7 @@ func TestGetTranscript(t *testing.T) {
 			},
 		}, nil)
 
-		res := r.call(t, "get_transcript", map[string]any{"conversation_id": "conv_v1_a"})
+		res := r.call(t, "get_transcript", map[string]any{"id_yape_account": "acc-1", "conversation_id": "conv_v1_a"})
 		out := decode[transcriptResult](t, res)
 
 		assert.Equal(t, transcriptResult{
@@ -293,7 +293,7 @@ func TestGetTranscript(t *testing.T) {
 			return req.Before != nil && *req.Before == "5" && req.Size != nil && *req.Size == "2"
 		})).Return(domain.MessagePage{ConversationID: "conv_v1_a", Messages: []domain.Message{{Sequence: 3, Role: domain.RoleMaker, Text: "hola"}}}, nil)
 
-		out := decode[transcriptResult](t, r.call(t, "get_transcript", map[string]any{"conversation_id": "conv_v1_a", "before": "5", "limit": 2}))
+		out := decode[transcriptResult](t, r.call(t, "get_transcript", map[string]any{"id_yape_account": "acc-1", "conversation_id": "conv_v1_a", "before": "5", "limit": 2}))
 
 		assert.False(t, out.HasOlder)
 		assert.Empty(t, out.OlderCursor, "no older messages, no cursor")
@@ -303,7 +303,7 @@ func TestGetTranscript(t *testing.T) {
 		r := newRig(t)
 		r.history.On("Messages", mock.Anything, mock.Anything).Return(domain.MessagePage{ConversationID: "conv_v1_a"}, nil)
 
-		assert.Contains(t, raw(t, r.call(t, "get_transcript", map[string]any{"conversation_id": "conv_v1_a"})), `"messages":[]`)
+		assert.Contains(t, raw(t, r.call(t, "get_transcript", map[string]any{"id_yape_account": "acc-1", "conversation_id": "conv_v1_a"})), `"messages":[]`)
 	})
 }
 
@@ -457,7 +457,7 @@ func TestEveryToolReportsAStoreFailureTheSameWay(t *testing.T) {
 		{"get_recent_conversations", account, func(r *rig) {
 			r.history.On("Conversations", mock.Anything, mock.Anything).Return(domain.ConversationList{}, down)
 		}},
-		{"get_transcript", map[string]any{"conversation_id": "conv_v1_a"}, func(r *rig) {
+		{"get_transcript", map[string]any{"id_yape_account": "acc-1", "conversation_id": "conv_v1_a"}, func(r *rig) {
 			r.history.On("Messages", mock.Anything, mock.Anything).Return(domain.MessagePage{}, down)
 		}},
 		{"get_activity_funnel", account, func(r *rig) {
@@ -510,7 +510,7 @@ func TestLogsNameTheToolAndNeverTheArguments(t *testing.T) {
 	}, nil)
 	r.insights.On("Funnel", mock.Anything, mock.Anything).Return(domain.Funnel{}, domain.ErrNotFound)
 
-	r.call(t, "get_transcript", map[string]any{"conversation_id": "conv_v1_secret"})
+	r.call(t, "get_transcript", map[string]any{"id_yape_account": "acc-1", "conversation_id": "conv_v1_secret"})
 	r.call(t, "get_activity_funnel", map[string]any{"id_yape_account": "acc-secret"})
 
 	logged := r.log.text()
@@ -591,4 +591,36 @@ func TestRound(t *testing.T) {
 	assert.Nil(t, round(nil, 10))
 	assert.Equal(t, 1.2, *round(new(1.23456), 10))
 	assert.Equal(t, 0.667, *round(new(0.66666), 1000))
+}
+
+// A conversation is read for an account: the tool takes it, passes it on, and a conversation of another account is not found.
+func TestGetTranscript_TheAccount(t *testing.T) {
+	t.Run("itIsPassedOn", func(t *testing.T) {
+		r := newRig(t)
+		r.history.On("Messages", mock.Anything, service.MessagesRequest{
+			IDYapeAccount: "acc-9", ConversationID: "conv_v1_a", Size: new("30"),
+		}).Return(domain.MessagePage{ConversationID: "conv_v1_a"}, nil).Once()
+
+		r.call(t, "get_transcript", map[string]any{"id_yape_account": "acc-9", "conversation_id": "conv_v1_a"})
+	})
+
+	t.Run("aConversationOfAnotherAccountIsNotFound", func(t *testing.T) {
+		r := newRig(t)
+		r.history.On("Messages", mock.Anything, mock.Anything).Return(domain.MessagePage{}, domain.ErrNotFound)
+
+		res := r.call(t, "get_transcript", map[string]any{"id_yape_account": "acc-2", "conversation_id": "conv_v1_a"})
+
+		require.True(t, res.IsError)
+		text := res.Content[0].(*sdkmcp.TextContent).Text
+		assert.Contains(t, text, "not found")
+		assert.NotContains(t, text, "acc-2", "the answer does not echo the account")
+	})
+
+	t.Run("withoutItTheToolIsNotCalled", func(t *testing.T) {
+		r := newRig(t) // no call of the service is expected
+
+		res := r.call(t, "get_transcript", map[string]any{"conversation_id": "conv_v1_a"})
+
+		assert.True(t, res.IsError)
+	})
 }

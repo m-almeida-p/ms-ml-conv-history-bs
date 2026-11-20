@@ -296,9 +296,69 @@ func TestNoLinkIsBuiltFromAnAccountOrIDThatIsNotSafeInAURL(t *testing.T) {
 		assert.Empty(t, conversationsContinuation(account, list), "account %q", account)
 	}
 
-	page := domain.MessagePage{Direction: domain.DirectionNewest, Size: 5, HasMore: true, BeforeCursor: "3", AfterCursor: "8"}
+	page := domain.MessagePage{Direction: domain.DirectionNewest, Size: 5, HasMore: true, BeforeCursor: "3", AfterCursor: "8", ConversationID: "conv_v1_a"}
+	for _, account := range []string{"", "acc 1", "acc&page[size]=1", "acc\r\nX-Injected: 1", "acc#x", "a/b", "é"} {
+		assert.Empty(t, continuation(account, page), "account %q", account)
+	}
 	for _, id := range []string{"", "conv a", "c&page[size]=1", "c\r\nX-Injected: 1", "c#x", "a/b"} {
 		page.ConversationID = id
-		assert.Empty(t, continuation(page), "conversation id %q", id)
+		assert.Empty(t, continuation("acc-1", page), "conversation id %q", id)
 	}
+}
+
+// A conversation carries its first message from the user, so a client can show what it was about without reading it.
+func TestConversations_TheFirstMessage(t *testing.T) {
+	at := time.Date(2026, 10, 20, 14, 7, 23, 500_000_000, time.UTC) // 1792505243.5
+	read := func(t *testing.T, conv domain.ConversationSummary) map[string]any {
+		t.Helper()
+		history := mocks.NewHistory(t)
+		history.On("Conversations", mock.Anything, service.ConversationsRequest{IDYapeAccount: "acc-1"}).Return(domain.ConversationList{
+			Direction: domain.DirectionNewest, Size: domain.ConversationListSize, Conversations: []domain.ConversationSummary{conv},
+		}, nil).Once()
+
+		rec := serve(t, history, &recordingLog{}, "/v1/conversations?idYapeAccount=acc-1")
+
+		require.Equal(t, http.StatusOK, rec.Code)
+		var body struct {
+			Conversations []map[string]any `json:"conversations"`
+		}
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+		require.Len(t, body.Conversations, 1)
+		return body.Conversations[0]
+	}
+	conv := func(first string, truncated bool) domain.ConversationSummary {
+		return domain.ConversationSummary{ConversationID: "conv_v1_a", MessageCount: 2, FirstOccurredAt: at, LastOccurredAt: at, FirstMessage: first, FirstMessageTruncated: truncated}
+	}
+
+	t.Run("a message", func(t *testing.T) {
+		got := read(t, conv("quiero yapear", false))
+
+		assert.Equal(t, "quiero yapear", got["firstMessage"])
+		assert.NotContains(t, got, "firstMessageTruncated", "false is the default and is left out")
+	})
+
+	t.Run("a message that was cut says so", func(t *testing.T) {
+		got := read(t, conv("quiero", true))
+
+		assert.Equal(t, "quiero", got["firstMessage"])
+		assert.Equal(t, true, got["firstMessageTruncated"])
+	})
+
+	t.Run("text that looks like markup, quotes and emoji reaches the client as it is", func(t *testing.T) {
+		text := `<b>"hola"</b> 🙂 ñ \n`
+
+		assert.Equal(t, text, read(t, conv(text, false))["firstMessage"])
+	})
+
+	t.Run("a conversation with no message from the user has no first message", func(t *testing.T) {
+		history := mocks.NewHistory(t)
+		history.On("Conversations", mock.Anything, service.ConversationsRequest{IDYapeAccount: "acc-1"}).Return(domain.ConversationList{
+			Direction: domain.DirectionNewest, Size: domain.ConversationListSize,
+			Conversations: []domain.ConversationSummary{{ConversationID: "conv_v1_a", MessageCount: 1, FirstOccurredAt: at, LastOccurredAt: at}},
+		}, nil).Once()
+
+		rec := serve(t, history, &recordingLog{}, "/v1/conversations?idYapeAccount=acc-1")
+
+		assert.NotContains(t, rec.Body.String(), "firstMessage")
+	})
 }

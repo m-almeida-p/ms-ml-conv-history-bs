@@ -88,11 +88,13 @@ func toConversationsResponse(list domain.ConversationList) conversationsResponse
 	conversations := make([]conversationResponse, 0, len(list.Conversations))
 	for _, conv := range list.Conversations {
 		conversations = append(conversations, conversationResponse{
-			ID:            conv.ConversationID,
-			Cursor:        domain.NewConversationCursor(conv.LastOccurredAt, conv.ConversationID).String(),
-			MessageCount:  conv.MessageCount,
-			FirstReceived: unixSeconds(conv.FirstOccurredAt),
-			LastReceived:  unixSeconds(conv.LastOccurredAt),
+			ID:                    conv.ConversationID,
+			Cursor:                domain.NewConversationCursor(conv.LastOccurredAt, conv.ConversationID).String(),
+			MessageCount:          conv.MessageCount,
+			FirstReceived:         unixSeconds(conv.FirstOccurredAt),
+			LastReceived:          unixSeconds(conv.LastOccurredAt),
+			FirstMessage:          conv.FirstMessage,
+			FirstMessageTruncated: conv.FirstMessageTruncated,
 		})
 	}
 

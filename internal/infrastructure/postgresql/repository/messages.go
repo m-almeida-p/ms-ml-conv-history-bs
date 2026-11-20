@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 
@@ -19,6 +21,8 @@ var (
 	sqlMessageExists string
 	//go:embed SQL/conversation_exists.sql
 	sqlConversationExists string
+	//go:embed SQL/conversation_owned.sql
+	sqlConversationOwned string
 	//go:embed SQL/list_messages_newest.sql
 	sqlListMessagesNewest string
 	//go:embed SQL/list_messages_before.sql
@@ -26,12 +30,22 @@ var (
 	//go:embed SQL/list_messages_after.sql
 	sqlListMessagesAfter string
 	//go:embed SQL/list_conversations.sql
-	sqlListConversations string
+	sqlListConversationsTemplate string
 	//go:embed SQL/list_conversations_before.sql
-	sqlListConversationsBefore string
+	sqlListConversationsBeforeTemplate string
 	//go:embed SQL/list_conversations_after.sql
-	sqlListConversationsAfter string
+	sqlListConversationsAfterTemplate string
+
+	// The conversation statements carry the first message; its limit is the domain's, written into the statement once.
+	sqlListConversations       = withFirstMessageLimit(sqlListConversationsTemplate)
+	sqlListConversationsBefore = withFirstMessageLimit(sqlListConversationsBeforeTemplate)
+	sqlListConversationsAfter  = withFirstMessageLimit(sqlListConversationsAfterTemplate)
 )
+
+// withFirstMessageLimit writes the limit of the first message into a conversation statement.
+func withFirstMessageLimit(sql string) string {
+	return strings.ReplaceAll(sql, "{{first_message_chars}}", strconv.Itoa(domain.FirstMessageMaxChars))
+}
 
 var _ repository.MessageRepository = (*PostgresMessageRepository)(nil)
 
@@ -50,6 +64,12 @@ func NewPostgresMessageRepository(db postgresql.DB) *PostgresMessageRepository {
 func (r *PostgresMessageRepository) ListMessages(ctx context.Context, q domain.PageQuery) (domain.Page, error) {
 	if q.Size < 1 || q.Size > domain.PageSize {
 		return domain.Page{}, fmt.Errorf("list messages: the page size must be from 1 to %d", domain.PageSize)
+	}
+
+	// A conversation is read for an account, and it is the account's own or it is not found. This comes before everything else, so
+	// that nothing of another account's conversation is read, not even whether a cursor is one of its messages.
+	if err := r.checkOwner(ctx, q); err != nil {
+		return domain.Page{}, err
 	}
 
 	query, args, err := r.pageQuery(ctx, q)
@@ -86,6 +106,20 @@ func (r *PostgresMessageRepository) ListMessages(ctx context.Context, q domain.P
 	return domain.Page{Messages: messages, HasMore: hasMore}, nil
 }
 
+// checkOwner confirms that the conversation is one of the account's. One that is not, or that does not exist, is domain.ErrNotFound:
+// the two cannot be told apart.
+func (r *PostgresMessageRepository) checkOwner(ctx context.Context, q domain.PageQuery) error {
+	var owned bool
+	if err := r.db.QueryRow(ctx, sqlConversationOwned, q.IDYapeAccount, q.ConversationID).Scan(&owned); err != nil {
+		return dbError("find the owner of the conversation", err)
+	}
+	if !owned {
+		return domain.ErrNotFound
+	}
+
+	return nil
+}
+
 // pageQuery chooses the statement and arguments that read the page q asks for.
 // For a page beside a cursor it first checks the cursor.
 func (r *PostgresMessageRepository) pageQuery(ctx context.Context, q domain.PageQuery) (string, []any, error) {
@@ -93,7 +127,7 @@ func (r *PostgresMessageRepository) pageQuery(ctx context.Context, q domain.Page
 
 	switch q.Direction {
 	case domain.DirectionNewest:
-		return sqlListMessagesNewest, []any{q.ConversationID, limit}, nil
+		return sqlListMessagesNewest, []any{q.ConversationID, limit, q.IDYapeAccount}, nil
 	case domain.DirectionBefore, domain.DirectionAfter:
 		if err := r.checkCursor(ctx, q); err != nil {
 			return "", nil, err
@@ -103,7 +137,7 @@ func (r *PostgresMessageRepository) pageQuery(ctx context.Context, q domain.Page
 			query = sqlListMessagesBefore
 		}
 
-		return query, []any{q.ConversationID, q.CursorSequence, limit}, nil
+		return query, []any{q.ConversationID, q.CursorSequence, limit, q.IDYapeAccount}, nil
 	}
 
 	return "", nil, fmt.Errorf("list messages: unknown direction %q", q.Direction)
@@ -182,10 +216,15 @@ func (r *PostgresMessageRepository) ListConversations(ctx context.Context, q dom
 
 	list := domain.ConversationList{Conversations: make([]domain.ConversationSummary, 0, q.Size+1)}
 	for rows.Next() {
-		var c domain.ConversationSummary
-		if err := rows.Scan(&c.ConversationID, &c.MessageCount, &c.FirstOccurredAt, &c.LastOccurredAt); err != nil {
+		var (
+			c         domain.ConversationSummary
+			first     *string
+			truncated *bool
+		)
+		if err := rows.Scan(&c.ConversationID, &c.MessageCount, &c.FirstOccurredAt, &c.LastOccurredAt, &first, &truncated); err != nil {
 			return domain.ConversationList{}, dbError("scan conversation", err)
 		}
+		c.FirstMessage, c.FirstMessageTruncated = value(first), truncated != nil && *truncated
 		list.Conversations = append(list.Conversations, c)
 	}
 	if err := rows.Err(); err != nil {

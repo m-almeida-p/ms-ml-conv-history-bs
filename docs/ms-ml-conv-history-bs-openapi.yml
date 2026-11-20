@@ -28,6 +28,17 @@ definitions:
           recent ones. It stays right even if the conversation receives a message later.
         example: 1792771602218000~conv_v1_8ab59029-bc3c-4e77-b49f-9fb053d90c52
         type: string
+      firstMessage:
+        description: |-
+          FirstMessage is the first message the user wrote in the conversation, cut at 200 characters, so that a list can say what each
+          conversation was about. It is absent when the conversation has no message from the user. It is text, never markup.
+        example: quiero yapear
+        type: string
+      firstMessageTruncated:
+        description: 'FirstMessageTruncated is true when FirstMessage is not the whole
+          message: it was cut at 200 characters or at the agent''s limit.'
+        example: false
+        type: boolean
       firstReceived:
         description: FirstReceived and LastReceived are the times of the first and
           last message, in Unix seconds with milliseconds.
@@ -262,6 +273,13 @@ paths:
       - description: 'Conversation id (letters, digits, . _ : -, up to 128 characters)'
         in: path
         name: conversationId
+        required: true
+        type: string
+      - description: 'Customer account the conversation belongs to (letters, digits,
+          . _ : -, up to 128 characters), sent once. A conversation of another account
+          is not found'
+        in: query
+        name: idYapeAccount
         required: true
         type: string
       - description: 'Message _id: read the page of messages older than it'

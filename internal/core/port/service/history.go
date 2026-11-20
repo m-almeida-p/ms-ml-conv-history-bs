@@ -14,6 +14,8 @@ import (
 // set, and neither means the newest page. Size is page[size] as a client sends it:
 // nil means the parameter was not sent and the page holds domain.PageSize messages.
 type MessagesRequest struct {
+	// IDYapeAccount is the account the conversation belongs to. A conversation of another account is not found.
+	IDYapeAccount  string
 	ConversationID string
 	Before         *string
 	After          *string

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -70,7 +71,7 @@ func TestListMessages(t *testing.T) {
 			name:  "newestPageIsReturnedOldestFirst",
 			query: domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionNewest},
 			expect: func(m pgxmock.PgxPoolIface) {
-				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 101).WillReturnRows(msgRows(9, 8, 7))
+				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 101, "acc-1").WillReturnRows(msgRows(9, 8, 7))
 			},
 			wantSeqs: []int{7, 8, 9},
 		},
@@ -78,7 +79,7 @@ func TestListMessages(t *testing.T) {
 			name:  "newestPageWithAnExtraRowHasMoreAndDropsTheOldestOne",
 			query: domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionNewest},
 			expect: func(m pgxmock.PgxPoolIface) {
-				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 101).WillReturnRows(msgRows(seqs(101, 1, -1)...))
+				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 101, "acc-1").WillReturnRows(msgRows(seqs(101, 1, -1)...))
 			},
 			wantSeqs:    seqs(2, 101, 1),
 			wantHasMore: true,
@@ -87,7 +88,7 @@ func TestListMessages(t *testing.T) {
 			name:  "exactlyOnePageHasNoMore",
 			query: domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionNewest},
 			expect: func(m pgxmock.PgxPoolIface) {
-				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 101).WillReturnRows(msgRows(seqs(100, 1, -1)...))
+				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 101, "acc-1").WillReturnRows(msgRows(seqs(100, 1, -1)...))
 			},
 			wantSeqs: seqs(1, 100, 1),
 		},
@@ -95,7 +96,7 @@ func TestListMessages(t *testing.T) {
 			name:  "newestOfUnknownConversation",
 			query: domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionNewest},
 			expect: func(m pgxmock.PgxPoolIface) {
-				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 101).WillReturnRows(msgRows())
+				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 101, "acc-1").WillReturnRows(msgRows())
 			},
 			wantErr: domain.ErrNotFound,
 		},
@@ -104,7 +105,7 @@ func TestListMessages(t *testing.T) {
 			query: domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionBefore, CursorSequence: 10},
 			expect: func(m pgxmock.PgxPoolIface) {
 				m.ExpectQuery("FROM conversation_messages").WithArgs("conv", 10).WillReturnRows(cursorRows(10))
-				m.ExpectQuery("sequence < ").WithArgs("conv", 10, 101).WillReturnRows(msgRows(9, 8, 7))
+				m.ExpectQuery("sequence < ").WithArgs("conv", 10, 101, "acc-1").WillReturnRows(msgRows(9, 8, 7))
 			},
 			wantSeqs: []int{7, 8, 9},
 		},
@@ -113,7 +114,7 @@ func TestListMessages(t *testing.T) {
 			query: domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionBefore, CursorSequence: 500},
 			expect: func(m pgxmock.PgxPoolIface) {
 				m.ExpectQuery("FROM conversation_messages").WithArgs("conv", 500).WillReturnRows(cursorRows(500))
-				m.ExpectQuery("sequence < ").WithArgs("conv", 500, 101).WillReturnRows(msgRows(seqs(499, 399, -1)...))
+				m.ExpectQuery("sequence < ").WithArgs("conv", 500, 101, "acc-1").WillReturnRows(msgRows(seqs(499, 399, -1)...))
 			},
 			wantSeqs:    seqs(400, 499, 1),
 			wantHasMore: true,
@@ -123,7 +124,7 @@ func TestListMessages(t *testing.T) {
 			query: domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionAfter, CursorSequence: 10},
 			expect: func(m pgxmock.PgxPoolIface) {
 				m.ExpectQuery("FROM conversation_messages").WithArgs("conv", 10).WillReturnRows(cursorRows(10))
-				m.ExpectQuery("sequence > ").WithArgs("conv", 10, 101).WillReturnRows(msgRows(11, 12))
+				m.ExpectQuery("sequence > ").WithArgs("conv", 10, 101, "acc-1").WillReturnRows(msgRows(11, 12))
 			},
 			wantSeqs: []int{11, 12},
 		},
@@ -132,7 +133,7 @@ func TestListMessages(t *testing.T) {
 			query: domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionAfter, CursorSequence: 10},
 			expect: func(m pgxmock.PgxPoolIface) {
 				m.ExpectQuery("FROM conversation_messages").WithArgs("conv", 10).WillReturnRows(cursorRows(10))
-				m.ExpectQuery("sequence > ").WithArgs("conv", 10, 101).WillReturnRows(msgRows(seqs(11, 111, 1)...))
+				m.ExpectQuery("sequence > ").WithArgs("conv", 10, 101, "acc-1").WillReturnRows(msgRows(seqs(11, 111, 1)...))
 			},
 			wantSeqs:    seqs(11, 110, 1),
 			wantHasMore: true,
@@ -142,7 +143,7 @@ func TestListMessages(t *testing.T) {
 			query: domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionAfter, CursorSequence: 10},
 			expect: func(m pgxmock.PgxPoolIface) {
 				m.ExpectQuery("FROM conversation_messages").WithArgs("conv", 10).WillReturnRows(cursorRows(10))
-				m.ExpectQuery("sequence > ").WithArgs("conv", 10, 101).WillReturnRows(msgRows())
+				m.ExpectQuery("sequence > ").WithArgs("conv", 10, 101, "acc-1").WillReturnRows(msgRows())
 			},
 			wantEmptyOK: true,
 		},
@@ -187,7 +188,7 @@ func TestListMessages(t *testing.T) {
 			name:  "newestQueryFails",
 			query: domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionNewest},
 			expect: func(m pgxmock.PgxPoolIface) {
-				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 101).WillReturnError(dbDown)
+				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 101, "acc-1").WillReturnError(dbDown)
 			},
 			wantErrText:  "list messages",
 			wantRootCaus: dbDown,
@@ -197,7 +198,7 @@ func TestListMessages(t *testing.T) {
 			query: domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionBefore, CursorSequence: 10},
 			expect: func(m pgxmock.PgxPoolIface) {
 				m.ExpectQuery("FROM conversation_messages").WithArgs("conv", 10).WillReturnRows(cursorRows(10))
-				m.ExpectQuery("sequence < ").WithArgs("conv", 10, 101).WillReturnError(dbDown)
+				m.ExpectQuery("sequence < ").WithArgs("conv", 10, 101, "acc-1").WillReturnError(dbDown)
 			},
 			wantErrText:  "list messages",
 			wantRootCaus: dbDown,
@@ -207,7 +208,7 @@ func TestListMessages(t *testing.T) {
 			query: domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionNewest},
 			expect: func(m pgxmock.PgxPoolIface) {
 				rows := pgxmock.NewRows(messageColumns).AddRow("conv", "not a number", "appUser", "a", "text", "m", false, "E", nil, nil, at)
-				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 101).WillReturnRows(rows)
+				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 101, "acc-1").WillReturnRows(rows)
 			},
 			wantErrText: "scan message",
 		},
@@ -215,7 +216,7 @@ func TestListMessages(t *testing.T) {
 			name:  "rowErrorEndsTheRead",
 			query: domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionNewest},
 			expect: func(m pgxmock.PgxPoolIface) {
-				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 101).WillReturnRows(msgRows(3).RowError(1, dbDown))
+				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 101, "acc-1").WillReturnRows(msgRows(3).RowError(1, dbDown))
 			},
 			wantErrText:  "list messages",
 			wantRootCaus: dbDown,
@@ -224,7 +225,7 @@ func TestListMessages(t *testing.T) {
 			name:  "aSmallerPageReadsOneRowMoreThanItsSize",
 			query: domain.PageQuery{Size: 3, ConversationID: "conv", Direction: domain.DirectionNewest},
 			expect: func(m pgxmock.PgxPoolIface) {
-				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 4).WillReturnRows(msgRows(9, 8, 7, 6))
+				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 4, "acc-1").WillReturnRows(msgRows(9, 8, 7, 6))
 			},
 			wantSeqs:    []int{7, 8, 9},
 			wantHasMore: true,
@@ -234,7 +235,7 @@ func TestListMessages(t *testing.T) {
 			query: domain.PageQuery{Size: 2, ConversationID: "conv", Direction: domain.DirectionBefore, CursorSequence: 10},
 			expect: func(m pgxmock.PgxPoolIface) {
 				m.ExpectQuery("SELECT 1").WithArgs("conv", 10).WillReturnRows(pgxmock.NewRows([]string{"x"}).AddRow(1))
-				m.ExpectQuery("sequence < ").WithArgs("conv", 10, 3).WillReturnRows(msgRows(9, 8, 7))
+				m.ExpectQuery("sequence < ").WithArgs("conv", 10, 3, "acc-1").WillReturnRows(msgRows(9, 8, 7))
 			},
 			wantSeqs:    []int{8, 9},
 			wantHasMore: true,
@@ -244,7 +245,7 @@ func TestListMessages(t *testing.T) {
 			query: domain.PageQuery{Size: 2, ConversationID: "conv", Direction: domain.DirectionAfter, CursorSequence: 10},
 			expect: func(m pgxmock.PgxPoolIface) {
 				m.ExpectQuery("SELECT 1").WithArgs("conv", 10).WillReturnRows(pgxmock.NewRows([]string{"x"}).AddRow(1))
-				m.ExpectQuery("sequence > ").WithArgs("conv", 10, 3).WillReturnRows(msgRows(11, 12))
+				m.ExpectQuery("sequence > ").WithArgs("conv", 10, 3, "acc-1").WillReturnRows(msgRows(11, 12))
 			},
 			wantSeqs: []int{11, 12},
 		},
@@ -252,7 +253,7 @@ func TestListMessages(t *testing.T) {
 			name:  "rowsEqualToTheSizeMeanNoMore",
 			query: domain.PageQuery{Size: 3, ConversationID: "conv", Direction: domain.DirectionNewest},
 			expect: func(m pgxmock.PgxPoolIface) {
-				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 4).WillReturnRows(msgRows(9, 8, 7))
+				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 4, "acc-1").WillReturnRows(msgRows(9, 8, 7))
 			},
 			wantSeqs: []int{7, 8, 9},
 		},
@@ -260,7 +261,7 @@ func TestListMessages(t *testing.T) {
 			name:  "fewerRowsThanTheSizeMeanNoMore",
 			query: domain.PageQuery{Size: 50, ConversationID: "conv", Direction: domain.DirectionNewest},
 			expect: func(m pgxmock.PgxPoolIface) {
-				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 51).WillReturnRows(msgRows(9, 8))
+				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 51, "acc-1").WillReturnRows(msgRows(9, 8))
 			},
 			wantSeqs: []int{8, 9},
 		},
@@ -269,7 +270,7 @@ func TestListMessages(t *testing.T) {
 			query: domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionBefore, CursorSequence: 500},
 			expect: func(m pgxmock.PgxPoolIface) {
 				m.ExpectQuery("SELECT 1").WithArgs("conv", 500).WillReturnRows(pgxmock.NewRows([]string{"x"}).AddRow(1))
-				m.ExpectQuery("sequence < ").WithArgs("conv", 500, 101).WillReturnRows(msgRows(seqs(499, 399, -1)...))
+				m.ExpectQuery("sequence < ").WithArgs("conv", 500, 101, "acc-1").WillReturnRows(msgRows(seqs(499, 399, -1)...))
 			},
 			wantSeqs:    seqs(400, 499, 1),
 			wantHasMore: true,
@@ -311,6 +312,11 @@ func TestListMessages(t *testing.T) {
 			mock, err := pgxmock.NewPool()
 			require.NoError(t, err)
 			defer mock.Close()
+			// Every read starts by finding the conversation among the account's own, once the page size is known to be right.
+			tt.query.IDYapeAccount = "acc-1"
+			if tt.query.Size >= 1 && tt.query.Size <= domain.PageSize {
+				expectOwned(mock, "acc-1", tt.query.ConversationID, true)
+			}
 			tt.expect(mock)
 
 			page, err := NewPostgresMessageRepository(mock).ListMessages(context.Background(), tt.query)
@@ -350,9 +356,10 @@ func TestListMessagesFillsEveryField(t *testing.T) {
 	var none *string
 	rows := pgxmock.NewRows(messageColumns).
 		AddRow("conv", 4, "appMaker", "ms-ml-genai-agent-bs", "text", "hola", true, "AgentMessageSent", none, none, at)
-	mock.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 101).WillReturnRows(rows)
+	expectOwned(mock, "acc-1", "conv", true)
+	mock.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 101, "acc-1").WillReturnRows(rows)
 
-	page, err := NewPostgresMessageRepository(mock).ListMessages(context.Background(), domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionNewest})
+	page, err := NewPostgresMessageRepository(mock).ListMessages(context.Background(), domain.PageQuery{IDYapeAccount: "acc-1", Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionNewest})
 
 	require.NoError(t, err)
 	require.Len(t, page.Messages, 1)
@@ -364,12 +371,12 @@ func TestListMessagesFillsEveryField(t *testing.T) {
 
 func TestListConversations(t *testing.T) {
 	dbDown := errors.New("connection reset")
-	cols := []string{"conversation_id", "message_count", "first_occurred_at", "last_occurred_at"}
+	cols := []string{"conversation_id", "message_count", "first_occurred_at", "last_occurred_at", "first_message", "first_message_truncated"}
 	// rowsOf returns the named conversations in the order given, each one an hour older than the one before.
 	rowsOf := func(ids ...string) *pgxmock.Rows {
 		rows := pgxmock.NewRows(cols)
 		for i, id := range ids {
-			rows.AddRow(id, i+1, at, at.Add(-time.Duration(i)*time.Hour))
+			rows.AddRow(id, i+1, at, at.Add(-time.Duration(i)*time.Hour), (*string)(nil), (*bool)(nil))
 		}
 
 		return rows
@@ -538,7 +545,7 @@ func TestListConversations(t *testing.T) {
 			name:  "scanFails",
 			query: domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionNewest, Size: size},
 			expect: func(m pgxmock.PgxPoolIface) {
-				rows := pgxmock.NewRows(cols).AddRow("c", "many", at, at)
+				rows := pgxmock.NewRows(cols).AddRow("c", "many", at, at, (*string)(nil), (*bool)(nil))
 				m.ExpectQuery(newestSQL).WithArgs("acc-1", 101).WillReturnRows(rows)
 			},
 			wantErrText: "scan conversation",
@@ -610,4 +617,101 @@ func TestBrokenInvariantsAreNotTheClientsFault(t *testing.T) {
 	assert.NotErrorIs(t, err, domain.ErrInvalidRequest)
 
 	assert.NoError(t, mock.ExpectationsWereMet(), "none of them reached the database")
+}
+
+// The first message of each conversation comes with the list, in the same statement: the conversation's first message from the user,
+// cut at domain.FirstMessageMaxChars characters, and whether it was cut. A conversation with no message from the user has none.
+func TestListConversations_TheFirstMessageOfEachConversation(t *testing.T) {
+	cols := []string{"conversation_id", "message_count", "first_occurred_at", "last_occurred_at", "first_message", "first_message_truncated"}
+	text, cut, yes := "quiero yapear", false, true
+	long := strings.Repeat("ñ", domain.FirstMessageMaxChars)
+
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	t.Cleanup(mock.Close)
+	mock.ExpectQuery(`FROM conversation_summaries\s+WHERE 1=1\s+AND id_yape_account = \$1\s+ORDER BY`).WithArgs("acc-1", 4).WillReturnRows(
+		pgxmock.NewRows(cols).
+			AddRow("c", 3, at, at, &text, &cut).
+			AddRow("b", 2, at, at, &long, &yes).
+			AddRow("a", 1, at, at, (*string)(nil), (*bool)(nil)))
+
+	list, err := NewPostgresMessageRepository(mock).ListConversations(t.Context(),
+		domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionNewest, Size: 3})
+
+	require.NoError(t, err)
+	require.Len(t, list.Conversations, 3)
+	assert.Equal(t, "quiero yapear", list.Conversations[0].FirstMessage)
+	assert.False(t, list.Conversations[0].FirstMessageTruncated)
+	assert.Equal(t, long, list.Conversations[1].FirstMessage)
+	assert.True(t, list.Conversations[1].FirstMessageTruncated)
+	assert.Empty(t, list.Conversations[2].FirstMessage, "no message from the user: none")
+	assert.False(t, list.Conversations[2].FirstMessageTruncated)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// One statement, and the same limit in all three: the limit is a constant of the domain written into the SQL, so the two cannot differ.
+func TestConversationStatements_CutTheFirstMessageAtTheLimitOfTheDomain(t *testing.T) {
+	for name, sql := range map[string]string{
+		"newest": sqlListConversations, "before": sqlListConversationsBefore, "after": sqlListConversationsAfter,
+	} {
+		t.Run(name, func(t *testing.T) {
+			assert.Contains(t, sql, fmt.Sprintf("left(m.text, %d)", domain.FirstMessageMaxChars))
+			assert.Contains(t, sql, fmt.Sprintf("char_length(m.text) > %d", domain.FirstMessageMaxChars))
+			assert.NotContains(t, sql, "{{", "no placeholder is left in the statement")
+		})
+	}
+}
+
+// expectOwned expects the question whether a conversation is one of the account's, and answers it.
+func expectOwned(m pgxmock.PgxPoolIface, account, conversation string, owned bool) {
+	m.ExpectQuery(`FROM conversation_summaries\s+WHERE 1=1\s+AND id_yape_account = \$1\s+AND conversation_id = \$2`).
+		WithArgs(account, conversation).WillReturnRows(pgxmock.NewRows([]string{"exists"}).AddRow(owned))
+}
+
+// A conversation is read for an account. One that belongs to another is not found, the same answer as one that does not exist, and
+// nothing of it is read: not its messages, and not whether a cursor is one of its messages.
+func TestListMessages_OnlyTheConversationsOfTheAccount(t *testing.T) {
+	for name, direction := range map[string]domain.Direction{
+		"the newest page": domain.DirectionNewest, "a page before a cursor": domain.DirectionBefore, "a page after a cursor": domain.DirectionAfter,
+	} {
+		t.Run("another account's conversation is not found for "+name, func(t *testing.T) {
+			mock, err := pgxmock.NewPool()
+			require.NoError(t, err)
+			defer mock.Close()
+			expectOwned(mock, "acc-2", "conv", false) // no other statement is expected: any other would fail the test
+
+			page, err := NewPostgresMessageRepository(mock).ListMessages(context.Background(),
+				domain.PageQuery{IDYapeAccount: "acc-2", ConversationID: "conv", Direction: direction, CursorSequence: 7, Size: 10})
+
+			require.ErrorIs(t, err, domain.ErrNotFound)
+			assert.Empty(t, page.Messages)
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+
+	t.Run("a database that fails while the owner is found is an error, never a conversation that is not found", func(t *testing.T) {
+		mock, err := pgxmock.NewPool()
+		require.NoError(t, err)
+		defer mock.Close()
+		mock.ExpectQuery(`FROM conversation_summaries`).WithArgs("acc-1", "conv").WillReturnError(errors.New("connection reset"))
+
+		_, err = NewPostgresMessageRepository(mock).ListMessages(context.Background(),
+			domain.PageQuery{IDYapeAccount: "acc-1", ConversationID: "conv", Direction: domain.DirectionNewest, Size: 10})
+
+		require.Error(t, err)
+		assert.NotErrorIs(t, err, domain.ErrNotFound)
+		assert.Contains(t, err.Error(), "find the owner")
+	})
+
+	t.Run("a page size that is wrong is refused before the database is asked", func(t *testing.T) {
+		mock, err := pgxmock.NewPool()
+		require.NoError(t, err)
+		defer mock.Close()
+
+		_, err = NewPostgresMessageRepository(mock).ListMessages(context.Background(),
+			domain.PageQuery{IDYapeAccount: "acc-1", ConversationID: "conv", Direction: domain.DirectionNewest, Size: 0})
+
+		require.Error(t, err)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
 }

@@ -109,6 +109,8 @@ func (e *InvalidRequestError) Is(target error) bool {
 // of a message of that conversation, and is ignored for DirectionNewest. Size is
 // how many messages to return, from 1 to PageSize.
 type PageQuery struct {
+	// IDYapeAccount is the account the conversation must belong to: one of another account is not found.
+	IDYapeAccount  string
 	ConversationID string
 	Direction      Direction
 	CursorSequence int
@@ -138,12 +140,19 @@ type MessagePage struct {
 	AfterCursor  string
 }
 
+// FirstMessageMaxChars is how many characters of the first message of a conversation the list carries.
+const FirstMessageMaxChars = 200
+
 // ConversationSummary describes one conversation of an account.
 type ConversationSummary struct {
 	ConversationID  string
 	MessageCount    int
 	FirstOccurredAt time.Time
 	LastOccurredAt  time.Time
+	// FirstMessage is the conversation's first message from the user, cut at FirstMessageMaxChars characters; empty when the
+	// conversation has none. FirstMessageTruncated is true when it was cut here or at the agent's limit.
+	FirstMessage          string
+	FirstMessageTruncated bool
 }
 
 // ConversationCursor is a position in an account's list of conversations: the time of a
