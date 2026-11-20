@@ -112,7 +112,7 @@ func TestMessagePagingAtVolume(t *testing.T) {
 	t.Run("aPageReadsSizePlusOneRowsAndTouchesPagesInProportionToTheSize", func(t *testing.T) {
 		var previous int
 		for _, size := range sizes {
-			plan := planOf(t, pool, newest, giantConversation, size+1)
+			plan := planOf(t, pool, newest, giantConversation, size+1, "acc_giant")
 			measure(t, "newest page, size "+strconv.Itoa(size), plan)
 
 			assert.Equal(t, size+1, messagesRowsRead(t, plan), "size %d reads one row more than the page, never the conversation:\n%s", size, strings.Join(plan, "\n"))
@@ -130,7 +130,7 @@ func TestMessagePagingAtVolume(t *testing.T) {
 		for _, size := range []int{1, domain.PageSize} {
 			cost := map[string]int{}
 			for name, cursor := range map[string]int{"end": giantMessages - 5, "middle": giantMessages / 2, "start": size + 5} {
-				plan := planOf(t, pool, before, giantConversation, cursor, size+1)
+				plan := planOf(t, pool, before, giantConversation, cursor, size+1, "acc_giant")
 				measure(t, "before "+name+", size "+strconv.Itoa(size), plan)
 
 				assert.Equal(t, size+1, messagesRowsRead(t, plan), "%s, size %d:\n%s", name, size, strings.Join(plan, "\n"))

@@ -116,3 +116,40 @@ func TestConversationsCarryTheirFirstMessage(t *testing.T) {
 		assert.NotEmpty(t, newer.Conversations)
 	})
 }
+
+// A conversation id is the agent's, and the agent does not check whose it is, so two accounts can end up with messages in one
+// conversation. Each account reads what is its own and nothing of the other's: the messages, and the first message of its row.
+func TestAConversationThatTwoAccountsWroteIntoIsReadByEachForItsOwn(t *testing.T) {
+	pool, _ := newHistoryDB(t)
+	ctx := context.Background()
+	say := func(sequence int, role, text, account string) {
+		t.Helper()
+		_, err := pool.Exec(ctx, `
+			INSERT INTO conversation_messages (conversation_id, sequence, role, author_id, text, event_name, id_yape_account, occurred_at)
+			VALUES ('shared', $1, $2, 'a', $3, 'UserMessageSent', $4, '2026-10-21T10:00:00Z'::timestamptz + $1::int * interval '1 second')`,
+			sequence, role, text, account)
+		require.NoError(t, err)
+	}
+	say(1, "appUser", "secreto de A", "acc-a")
+	say(2, "appMaker", "respuesta para A", "acc-a")
+	say(3, "appUser", "mensaje de B", "acc-b")
+	say(4, "appMaker", "respuesta para B", "acc-b")
+	refreshSummaries(t, pool)
+	repo := repository.NewPostgresMessageRepository(pool)
+
+	firstOfTheRow := map[string]string{"acc-a": "secreto de A", "acc-b": ""} // the first of the conversation is A's: B's row shows none, and not A's
+	for account, want := range map[string][]string{"acc-a": {"secreto de A", "respuesta para A"}, "acc-b": {"mensaje de B", "respuesta para B"}} {
+		page, err := repo.ListMessages(ctx, domain.PageQuery{IDYapeAccount: account, ConversationID: "shared", Direction: domain.DirectionNewest, Size: domain.PageSize})
+		require.NoError(t, err, account)
+		var got []string
+		for _, m := range page.Messages {
+			got = append(got, m.Text)
+		}
+		assert.Equal(t, want, got, "%s reads its own messages of the shared conversation, and no other", account)
+
+		list, err := repo.ListConversations(ctx, domain.ConversationQuery{IDYapeAccount: account, Direction: domain.DirectionNewest, Size: domain.ConversationListSize})
+		require.NoError(t, err, account)
+		require.Len(t, list.Conversations, 1, account)
+		assert.Equal(t, firstOfTheRow[account], list.Conversations[0].FirstMessage, "%s: the row never shows a first message of the other account", account)
+	}
+}

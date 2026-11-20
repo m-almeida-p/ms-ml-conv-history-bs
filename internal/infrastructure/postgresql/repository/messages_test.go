@@ -71,7 +71,7 @@ func TestListMessages(t *testing.T) {
 			name:  "newestPageIsReturnedOldestFirst",
 			query: domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionNewest},
 			expect: func(m pgxmock.PgxPoolIface) {
-				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 101).WillReturnRows(msgRows(9, 8, 7))
+				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 101, "acc-1").WillReturnRows(msgRows(9, 8, 7))
 			},
 			wantSeqs: []int{7, 8, 9},
 		},
@@ -79,7 +79,7 @@ func TestListMessages(t *testing.T) {
 			name:  "newestPageWithAnExtraRowHasMoreAndDropsTheOldestOne",
 			query: domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionNewest},
 			expect: func(m pgxmock.PgxPoolIface) {
-				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 101).WillReturnRows(msgRows(seqs(101, 1, -1)...))
+				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 101, "acc-1").WillReturnRows(msgRows(seqs(101, 1, -1)...))
 			},
 			wantSeqs:    seqs(2, 101, 1),
 			wantHasMore: true,
@@ -88,7 +88,7 @@ func TestListMessages(t *testing.T) {
 			name:  "exactlyOnePageHasNoMore",
 			query: domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionNewest},
 			expect: func(m pgxmock.PgxPoolIface) {
-				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 101).WillReturnRows(msgRows(seqs(100, 1, -1)...))
+				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 101, "acc-1").WillReturnRows(msgRows(seqs(100, 1, -1)...))
 			},
 			wantSeqs: seqs(1, 100, 1),
 		},
@@ -96,7 +96,7 @@ func TestListMessages(t *testing.T) {
 			name:  "newestOfUnknownConversation",
 			query: domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionNewest},
 			expect: func(m pgxmock.PgxPoolIface) {
-				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 101).WillReturnRows(msgRows())
+				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 101, "acc-1").WillReturnRows(msgRows())
 			},
 			wantErr: domain.ErrNotFound,
 		},
@@ -105,7 +105,7 @@ func TestListMessages(t *testing.T) {
 			query: domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionBefore, CursorSequence: 10},
 			expect: func(m pgxmock.PgxPoolIface) {
 				m.ExpectQuery("FROM conversation_messages").WithArgs("conv", 10).WillReturnRows(cursorRows(10))
-				m.ExpectQuery("sequence < ").WithArgs("conv", 10, 101).WillReturnRows(msgRows(9, 8, 7))
+				m.ExpectQuery("sequence < ").WithArgs("conv", 10, 101, "acc-1").WillReturnRows(msgRows(9, 8, 7))
 			},
 			wantSeqs: []int{7, 8, 9},
 		},
@@ -114,7 +114,7 @@ func TestListMessages(t *testing.T) {
 			query: domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionBefore, CursorSequence: 500},
 			expect: func(m pgxmock.PgxPoolIface) {
 				m.ExpectQuery("FROM conversation_messages").WithArgs("conv", 500).WillReturnRows(cursorRows(500))
-				m.ExpectQuery("sequence < ").WithArgs("conv", 500, 101).WillReturnRows(msgRows(seqs(499, 399, -1)...))
+				m.ExpectQuery("sequence < ").WithArgs("conv", 500, 101, "acc-1").WillReturnRows(msgRows(seqs(499, 399, -1)...))
 			},
 			wantSeqs:    seqs(400, 499, 1),
 			wantHasMore: true,
@@ -124,7 +124,7 @@ func TestListMessages(t *testing.T) {
 			query: domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionAfter, CursorSequence: 10},
 			expect: func(m pgxmock.PgxPoolIface) {
 				m.ExpectQuery("FROM conversation_messages").WithArgs("conv", 10).WillReturnRows(cursorRows(10))
-				m.ExpectQuery("sequence > ").WithArgs("conv", 10, 101).WillReturnRows(msgRows(11, 12))
+				m.ExpectQuery("sequence > ").WithArgs("conv", 10, 101, "acc-1").WillReturnRows(msgRows(11, 12))
 			},
 			wantSeqs: []int{11, 12},
 		},
@@ -133,7 +133,7 @@ func TestListMessages(t *testing.T) {
 			query: domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionAfter, CursorSequence: 10},
 			expect: func(m pgxmock.PgxPoolIface) {
 				m.ExpectQuery("FROM conversation_messages").WithArgs("conv", 10).WillReturnRows(cursorRows(10))
-				m.ExpectQuery("sequence > ").WithArgs("conv", 10, 101).WillReturnRows(msgRows(seqs(11, 111, 1)...))
+				m.ExpectQuery("sequence > ").WithArgs("conv", 10, 101, "acc-1").WillReturnRows(msgRows(seqs(11, 111, 1)...))
 			},
 			wantSeqs:    seqs(11, 110, 1),
 			wantHasMore: true,
@@ -143,7 +143,7 @@ func TestListMessages(t *testing.T) {
 			query: domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionAfter, CursorSequence: 10},
 			expect: func(m pgxmock.PgxPoolIface) {
 				m.ExpectQuery("FROM conversation_messages").WithArgs("conv", 10).WillReturnRows(cursorRows(10))
-				m.ExpectQuery("sequence > ").WithArgs("conv", 10, 101).WillReturnRows(msgRows())
+				m.ExpectQuery("sequence > ").WithArgs("conv", 10, 101, "acc-1").WillReturnRows(msgRows())
 			},
 			wantEmptyOK: true,
 		},
@@ -188,7 +188,7 @@ func TestListMessages(t *testing.T) {
 			name:  "newestQueryFails",
 			query: domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionNewest},
 			expect: func(m pgxmock.PgxPoolIface) {
-				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 101).WillReturnError(dbDown)
+				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 101, "acc-1").WillReturnError(dbDown)
 			},
 			wantErrText:  "list messages",
 			wantRootCaus: dbDown,
@@ -198,7 +198,7 @@ func TestListMessages(t *testing.T) {
 			query: domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionBefore, CursorSequence: 10},
 			expect: func(m pgxmock.PgxPoolIface) {
 				m.ExpectQuery("FROM conversation_messages").WithArgs("conv", 10).WillReturnRows(cursorRows(10))
-				m.ExpectQuery("sequence < ").WithArgs("conv", 10, 101).WillReturnError(dbDown)
+				m.ExpectQuery("sequence < ").WithArgs("conv", 10, 101, "acc-1").WillReturnError(dbDown)
 			},
 			wantErrText:  "list messages",
 			wantRootCaus: dbDown,
@@ -208,7 +208,7 @@ func TestListMessages(t *testing.T) {
 			query: domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionNewest},
 			expect: func(m pgxmock.PgxPoolIface) {
 				rows := pgxmock.NewRows(messageColumns).AddRow("conv", "not a number", "appUser", "a", "text", "m", false, "E", nil, nil, at)
-				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 101).WillReturnRows(rows)
+				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 101, "acc-1").WillReturnRows(rows)
 			},
 			wantErrText: "scan message",
 		},
@@ -216,7 +216,7 @@ func TestListMessages(t *testing.T) {
 			name:  "rowErrorEndsTheRead",
 			query: domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionNewest},
 			expect: func(m pgxmock.PgxPoolIface) {
-				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 101).WillReturnRows(msgRows(3).RowError(1, dbDown))
+				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 101, "acc-1").WillReturnRows(msgRows(3).RowError(1, dbDown))
 			},
 			wantErrText:  "list messages",
 			wantRootCaus: dbDown,
@@ -225,7 +225,7 @@ func TestListMessages(t *testing.T) {
 			name:  "aSmallerPageReadsOneRowMoreThanItsSize",
 			query: domain.PageQuery{Size: 3, ConversationID: "conv", Direction: domain.DirectionNewest},
 			expect: func(m pgxmock.PgxPoolIface) {
-				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 4).WillReturnRows(msgRows(9, 8, 7, 6))
+				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 4, "acc-1").WillReturnRows(msgRows(9, 8, 7, 6))
 			},
 			wantSeqs:    []int{7, 8, 9},
 			wantHasMore: true,
@@ -235,7 +235,7 @@ func TestListMessages(t *testing.T) {
 			query: domain.PageQuery{Size: 2, ConversationID: "conv", Direction: domain.DirectionBefore, CursorSequence: 10},
 			expect: func(m pgxmock.PgxPoolIface) {
 				m.ExpectQuery("SELECT 1").WithArgs("conv", 10).WillReturnRows(pgxmock.NewRows([]string{"x"}).AddRow(1))
-				m.ExpectQuery("sequence < ").WithArgs("conv", 10, 3).WillReturnRows(msgRows(9, 8, 7))
+				m.ExpectQuery("sequence < ").WithArgs("conv", 10, 3, "acc-1").WillReturnRows(msgRows(9, 8, 7))
 			},
 			wantSeqs:    []int{8, 9},
 			wantHasMore: true,
@@ -245,7 +245,7 @@ func TestListMessages(t *testing.T) {
 			query: domain.PageQuery{Size: 2, ConversationID: "conv", Direction: domain.DirectionAfter, CursorSequence: 10},
 			expect: func(m pgxmock.PgxPoolIface) {
 				m.ExpectQuery("SELECT 1").WithArgs("conv", 10).WillReturnRows(pgxmock.NewRows([]string{"x"}).AddRow(1))
-				m.ExpectQuery("sequence > ").WithArgs("conv", 10, 3).WillReturnRows(msgRows(11, 12))
+				m.ExpectQuery("sequence > ").WithArgs("conv", 10, 3, "acc-1").WillReturnRows(msgRows(11, 12))
 			},
 			wantSeqs: []int{11, 12},
 		},
@@ -253,7 +253,7 @@ func TestListMessages(t *testing.T) {
 			name:  "rowsEqualToTheSizeMeanNoMore",
 			query: domain.PageQuery{Size: 3, ConversationID: "conv", Direction: domain.DirectionNewest},
 			expect: func(m pgxmock.PgxPoolIface) {
-				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 4).WillReturnRows(msgRows(9, 8, 7))
+				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 4, "acc-1").WillReturnRows(msgRows(9, 8, 7))
 			},
 			wantSeqs: []int{7, 8, 9},
 		},
@@ -261,7 +261,7 @@ func TestListMessages(t *testing.T) {
 			name:  "fewerRowsThanTheSizeMeanNoMore",
 			query: domain.PageQuery{Size: 50, ConversationID: "conv", Direction: domain.DirectionNewest},
 			expect: func(m pgxmock.PgxPoolIface) {
-				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 51).WillReturnRows(msgRows(9, 8))
+				m.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 51, "acc-1").WillReturnRows(msgRows(9, 8))
 			},
 			wantSeqs: []int{8, 9},
 		},
@@ -270,7 +270,7 @@ func TestListMessages(t *testing.T) {
 			query: domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionBefore, CursorSequence: 500},
 			expect: func(m pgxmock.PgxPoolIface) {
 				m.ExpectQuery("SELECT 1").WithArgs("conv", 500).WillReturnRows(pgxmock.NewRows([]string{"x"}).AddRow(1))
-				m.ExpectQuery("sequence < ").WithArgs("conv", 500, 101).WillReturnRows(msgRows(seqs(499, 399, -1)...))
+				m.ExpectQuery("sequence < ").WithArgs("conv", 500, 101, "acc-1").WillReturnRows(msgRows(seqs(499, 399, -1)...))
 			},
 			wantSeqs:    seqs(400, 499, 1),
 			wantHasMore: true,
@@ -357,7 +357,7 @@ func TestListMessagesFillsEveryField(t *testing.T) {
 	rows := pgxmock.NewRows(messageColumns).
 		AddRow("conv", 4, "appMaker", "ms-ml-genai-agent-bs", "text", "hola", true, "AgentMessageSent", none, none, at)
 	expectOwned(mock, "acc-1", "conv", true)
-	mock.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 101).WillReturnRows(rows)
+	mock.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 101, "acc-1").WillReturnRows(rows)
 
 	page, err := NewPostgresMessageRepository(mock).ListMessages(context.Background(), domain.PageQuery{IDYapeAccount: "acc-1", Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionNewest})
 

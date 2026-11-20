@@ -127,7 +127,7 @@ func (r *PostgresMessageRepository) pageQuery(ctx context.Context, q domain.Page
 
 	switch q.Direction {
 	case domain.DirectionNewest:
-		return sqlListMessagesNewest, []any{q.ConversationID, limit}, nil
+		return sqlListMessagesNewest, []any{q.ConversationID, limit, q.IDYapeAccount}, nil
 	case domain.DirectionBefore, domain.DirectionAfter:
 		if err := r.checkCursor(ctx, q); err != nil {
 			return "", nil, err
@@ -137,7 +137,7 @@ func (r *PostgresMessageRepository) pageQuery(ctx context.Context, q domain.Page
 			query = sqlListMessagesBefore
 		}
 
-		return query, []any{q.ConversationID, q.CursorSequence, limit}, nil
+		return query, []any{q.ConversationID, q.CursorSequence, limit, q.IDYapeAccount}, nil
 	}
 
 	return "", nil, fmt.Errorf("list messages: unknown direction %q", q.Direction)
