@@ -50,6 +50,16 @@ running instance); `run_api.sh` also takes `--port`. They work from any director
 instance first, and exit at once, with the log path, when the binary dies (a wrong config, an unreachable
 database). Logs go to `scripts/logs/` and are gitignored. `check-conventions.sh` in the same folder is tracked.
 
+### How long an event takes to reach the history
+
+```bash
+./scripts/pipeline_latency.sh --window "1 day" --by-partition --lag
+```
+
+It prints the seconds between the moment the agent recorded an event and the moment the consumer stored it (average, p50, p95, p99 and
+the maximum, for the whole window and for each Kafka partition) and the lag of each consumer group. It only reads. Locally the p50 is
+about 0.55 s and the p95 about 0.93 s; `-h` says what else it takes.
+
 ### Check it against the table
 
 To see that the API serves what the consumers wrote, produce a conversation (for example with the explorer flows in
