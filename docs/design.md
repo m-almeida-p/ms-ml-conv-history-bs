@@ -303,6 +303,18 @@ running the other way, Postgres treats part of the cursor as a filter, and a pag
 Every request has a deadline of 10 seconds (`requestTimeout` in `internal/infrastructure/api/app.go`). A request that runs past it has its query cancelled and is answered
 `503` (see Errors), so a request cannot hold a connection for long. A page is cheap now, so the deadline is a safety net and not something a normal request comes near.
 
+
+### Whose conversation it is
+
+A conversation is read **for an account**: `GET /v1/conversations/{id}/messages` takes `idYapeAccount` (required, sent once, the same
+identifier rule as the list), and a conversation that is not one of that account's is `404 conversation-not-found`, with the same status
+and the same body as one that does not exist, so that a client cannot learn that an id is taken. The check comes first and covers
+every page, a page beside a cursor included: it asks `conversation_summaries` (`id_yape_account`, `conversation_id`), so a cursor of a
+message of another account's conversation is not found either, and never an empty page. A conversation with no account is nobody's.
+The `Link` header keeps the account, so following it reads for the same account. The service still has no authentication: the account is
+what the caller says it is, and this keeps a client that works for one account from reading another's by id, not from lying about the
+account. `get_transcript` takes `id_yape_account` for the same reason.
+
 ### Errors
 
 Every error is a problem details object ([RFC 9457](https://www.rfc-editor.org/info/rfc9457/)) served as `application/problem+json`.
@@ -370,7 +382,7 @@ statistics have their own read-only queries in `internal/infrastructure/postgres
 |------|-----------|-------|
 | `list_accounts` | `limit` (default 20, max 100), `offset` | Groups `conversation_summaries`; an account with only tool events is not listed, as in the API |
 | `get_recent_conversations` | `id_yape_account`, `limit` (default 10) | Counts and times, no text |
-| `get_transcript` | `conversation_id`, `limit` (default 30), `before` | Newest page; `older_cursor` pages back |
+| `get_transcript` | `id_yape_account`, `conversation_id`, `limit` (default 30), `before` | Newest page; `older_cursor` pages back |
 | `get_activity_funnel` | `id_yape_account`, `flow` (default `p2p`), `days` (default 30, max 365) | One segment is one attempt. `cards_offered` = attempts minus `none`; `approval_rate` = approved over the settled ones (everything but `open`) |
 | `get_latency_stats` | as above | `ask_to_card_seconds` is the agent's time, `card_to_resolution_seconds` the person's. Attempts that never reached a card are left out |
 | `get_tool_health` | as above, `flow` ignored | Any outcome but `ok` counts as a failure |

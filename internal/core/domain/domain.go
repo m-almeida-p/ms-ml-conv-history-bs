@@ -109,6 +109,8 @@ func (e *InvalidRequestError) Is(target error) bool {
 // of a message of that conversation, and is ignored for DirectionNewest. Size is
 // how many messages to return, from 1 to PageSize.
 type PageQuery struct {
+	// IDYapeAccount is the account the conversation must belong to: one of another account is not found.
+	IDYapeAccount  string
 	ConversationID string
 	Direction      Direction
 	CursorSequence int

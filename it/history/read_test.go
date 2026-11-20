@@ -50,7 +50,8 @@ func TestRead(t *testing.T) {
 		VALUES ('small', 2, 'appUser', 'a', 'hola', 'UserMessageSent', 'acc-1', '2026-10-20T11:00:00Z'),
 		       ('small', 5, 'appMaker', 'a', 'chau', 'AgentMessageSent', 'acc-1', '2026-10-20T11:05:00Z'),
 		       ('other', 1, 'appUser', 'a', 'x', 'UserMessageSent', 'acc-2', '2026-10-20T13:00:00Z'),
-		       ('noaccount', 1, 'appMaker', 'a', 'y', 'GuardrailResponseSent', NULL, '2026-10-20T13:30:00Z')`)
+		       ('noaccount', 1, 'appMaker', 'a', 'y', 'GuardrailResponseSent', NULL, '2026-10-20T13:30:00Z'),
+		       ('guardrail', 1, 'appMaker', 'a', 'y', 'GuardrailResponseSent', 'acc-3', '2026-10-20T13:40:00Z')`)
 	require.NoError(t, err)
 	refreshSummaries(t, pool)
 
@@ -62,26 +63,26 @@ func TestRead(t *testing.T) {
 			wantHasMore bool
 			wantErr     error
 		}{
-			{name: "newestPage", query: domain.PageQuery{Size: domain.PageSize, ConversationID: "big", Direction: domain.DirectionNewest}, wantSeqs: sequenceRange(151, 250), wantHasMore: true},
-			{name: "beforeTheOldestOfTheNewestPage", query: domain.PageQuery{Size: domain.PageSize, ConversationID: "big", Direction: domain.DirectionBefore, CursorSequence: 151}, wantSeqs: sequenceRange(51, 150), wantHasMore: true},
-			{name: "beforeLeavesTheFirstFifty", query: domain.PageQuery{Size: domain.PageSize, ConversationID: "big", Direction: domain.DirectionBefore, CursorSequence: 51}, wantSeqs: sequenceRange(1, 50)},
-			{name: "beforeTheVeryFirstMessageIsEmpty", query: domain.PageQuery{Size: domain.PageSize, ConversationID: "big", Direction: domain.DirectionBefore, CursorSequence: 1}, wantSeqs: []int{}},
-			{name: "afterTheFirstHundred", query: domain.PageQuery{Size: domain.PageSize, ConversationID: "big", Direction: domain.DirectionAfter, CursorSequence: 100}, wantSeqs: sequenceRange(101, 200), wantHasMore: true},
-			{name: "afterLeavesTheLastFifty", query: domain.PageQuery{Size: domain.PageSize, ConversationID: "big", Direction: domain.DirectionAfter, CursorSequence: 200}, wantSeqs: sequenceRange(201, 250)},
-			{name: "afterTheLastMessageIsEmpty", query: domain.PageQuery{Size: domain.PageSize, ConversationID: "big", Direction: domain.DirectionAfter, CursorSequence: 250}, wantSeqs: []int{}},
-			{name: "aConversationOfExactlyOnePage", query: domain.PageQuery{Size: domain.PageSize, ConversationID: "exact", Direction: domain.DirectionNewest}, wantSeqs: sequenceRange(1, 100)},
-			{name: "gapsInTheSequenceAreFine", query: domain.PageQuery{Size: domain.PageSize, ConversationID: "small", Direction: domain.DirectionNewest}, wantSeqs: []int{2, 5}},
-			{name: "afterAMessageAcrossAGap", query: domain.PageQuery{Size: domain.PageSize, ConversationID: "small", Direction: domain.DirectionAfter, CursorSequence: 2}, wantSeqs: []int{5}},
-			{name: "beforeAMessageAcrossAGap", query: domain.PageQuery{Size: domain.PageSize, ConversationID: "small", Direction: domain.DirectionBefore, CursorSequence: 5}, wantSeqs: []int{2}},
-			{name: "aSmallPageOfTheNewest", query: domain.PageQuery{Size: 7, ConversationID: "big", Direction: domain.DirectionNewest}, wantSeqs: sequenceRange(244, 250), wantHasMore: true},
-			{name: "aSmallPageBefore", query: domain.PageQuery{Size: 7, ConversationID: "big", Direction: domain.DirectionBefore, CursorSequence: 244}, wantSeqs: sequenceRange(237, 243), wantHasMore: true},
-			{name: "aSmallPageAfter", query: domain.PageQuery{Size: 7, ConversationID: "big", Direction: domain.DirectionAfter, CursorSequence: 100}, wantSeqs: sequenceRange(101, 107), wantHasMore: true},
-			{name: "aSmallPageThatEndsTheConversationHasNoMore", query: domain.PageQuery{Size: 7, ConversationID: "big", Direction: domain.DirectionAfter, CursorSequence: 243}, wantSeqs: sequenceRange(244, 250)},
-			{name: "aSizeOfOne", query: domain.PageQuery{Size: 1, ConversationID: "small", Direction: domain.DirectionNewest}, wantSeqs: []int{5}, wantHasMore: true},
-			{name: "unknownConversation", query: domain.PageQuery{Size: domain.PageSize, ConversationID: "nope", Direction: domain.DirectionNewest}, wantErr: domain.ErrNotFound},
-			{name: "cursorThatIsNoMessageOfTheConversation", query: domain.PageQuery{Size: domain.PageSize, ConversationID: "big", Direction: domain.DirectionBefore, CursorSequence: 999}, wantErr: domain.ErrInvalidCursor},
-			{name: "cursorThatDoesNotExist", query: domain.PageQuery{Size: domain.PageSize, ConversationID: "big", Direction: domain.DirectionAfter, CursorSequence: 424242}, wantErr: domain.ErrInvalidCursor},
-			{name: "cursorInAnUnknownConversation", query: domain.PageQuery{Size: domain.PageSize, ConversationID: "nope", Direction: domain.DirectionAfter, CursorSequence: 1}, wantErr: domain.ErrNotFound},
+			{name: "newestPage", query: domain.PageQuery{IDYapeAccount: "acc-1", Size: domain.PageSize, ConversationID: "big", Direction: domain.DirectionNewest}, wantSeqs: sequenceRange(151, 250), wantHasMore: true},
+			{name: "beforeTheOldestOfTheNewestPage", query: domain.PageQuery{IDYapeAccount: "acc-1", Size: domain.PageSize, ConversationID: "big", Direction: domain.DirectionBefore, CursorSequence: 151}, wantSeqs: sequenceRange(51, 150), wantHasMore: true},
+			{name: "beforeLeavesTheFirstFifty", query: domain.PageQuery{IDYapeAccount: "acc-1", Size: domain.PageSize, ConversationID: "big", Direction: domain.DirectionBefore, CursorSequence: 51}, wantSeqs: sequenceRange(1, 50)},
+			{name: "beforeTheVeryFirstMessageIsEmpty", query: domain.PageQuery{IDYapeAccount: "acc-1", Size: domain.PageSize, ConversationID: "big", Direction: domain.DirectionBefore, CursorSequence: 1}, wantSeqs: []int{}},
+			{name: "afterTheFirstHundred", query: domain.PageQuery{IDYapeAccount: "acc-1", Size: domain.PageSize, ConversationID: "big", Direction: domain.DirectionAfter, CursorSequence: 100}, wantSeqs: sequenceRange(101, 200), wantHasMore: true},
+			{name: "afterLeavesTheLastFifty", query: domain.PageQuery{IDYapeAccount: "acc-1", Size: domain.PageSize, ConversationID: "big", Direction: domain.DirectionAfter, CursorSequence: 200}, wantSeqs: sequenceRange(201, 250)},
+			{name: "afterTheLastMessageIsEmpty", query: domain.PageQuery{IDYapeAccount: "acc-1", Size: domain.PageSize, ConversationID: "big", Direction: domain.DirectionAfter, CursorSequence: 250}, wantSeqs: []int{}},
+			{name: "aConversationOfExactlyOnePage", query: domain.PageQuery{IDYapeAccount: "acc-1", Size: domain.PageSize, ConversationID: "exact", Direction: domain.DirectionNewest}, wantSeqs: sequenceRange(1, 100)},
+			{name: "gapsInTheSequenceAreFine", query: domain.PageQuery{IDYapeAccount: "acc-1", Size: domain.PageSize, ConversationID: "small", Direction: domain.DirectionNewest}, wantSeqs: []int{2, 5}},
+			{name: "afterAMessageAcrossAGap", query: domain.PageQuery{IDYapeAccount: "acc-1", Size: domain.PageSize, ConversationID: "small", Direction: domain.DirectionAfter, CursorSequence: 2}, wantSeqs: []int{5}},
+			{name: "beforeAMessageAcrossAGap", query: domain.PageQuery{IDYapeAccount: "acc-1", Size: domain.PageSize, ConversationID: "small", Direction: domain.DirectionBefore, CursorSequence: 5}, wantSeqs: []int{2}},
+			{name: "aSmallPageOfTheNewest", query: domain.PageQuery{IDYapeAccount: "acc-1", Size: 7, ConversationID: "big", Direction: domain.DirectionNewest}, wantSeqs: sequenceRange(244, 250), wantHasMore: true},
+			{name: "aSmallPageBefore", query: domain.PageQuery{IDYapeAccount: "acc-1", Size: 7, ConversationID: "big", Direction: domain.DirectionBefore, CursorSequence: 244}, wantSeqs: sequenceRange(237, 243), wantHasMore: true},
+			{name: "aSmallPageAfter", query: domain.PageQuery{IDYapeAccount: "acc-1", Size: 7, ConversationID: "big", Direction: domain.DirectionAfter, CursorSequence: 100}, wantSeqs: sequenceRange(101, 107), wantHasMore: true},
+			{name: "aSmallPageThatEndsTheConversationHasNoMore", query: domain.PageQuery{IDYapeAccount: "acc-1", Size: 7, ConversationID: "big", Direction: domain.DirectionAfter, CursorSequence: 243}, wantSeqs: sequenceRange(244, 250)},
+			{name: "aSizeOfOne", query: domain.PageQuery{IDYapeAccount: "acc-1", Size: 1, ConversationID: "small", Direction: domain.DirectionNewest}, wantSeqs: []int{5}, wantHasMore: true},
+			{name: "unknownConversation", query: domain.PageQuery{IDYapeAccount: "acc-1", Size: domain.PageSize, ConversationID: "nope", Direction: domain.DirectionNewest}, wantErr: domain.ErrNotFound},
+			{name: "cursorThatIsNoMessageOfTheConversation", query: domain.PageQuery{IDYapeAccount: "acc-1", Size: domain.PageSize, ConversationID: "big", Direction: domain.DirectionBefore, CursorSequence: 999}, wantErr: domain.ErrInvalidCursor},
+			{name: "cursorThatDoesNotExist", query: domain.PageQuery{IDYapeAccount: "acc-1", Size: domain.PageSize, ConversationID: "big", Direction: domain.DirectionAfter, CursorSequence: 424242}, wantErr: domain.ErrInvalidCursor},
+			{name: "cursorInAnUnknownConversation", query: domain.PageQuery{IDYapeAccount: "acc-1", Size: domain.PageSize, ConversationID: "nope", Direction: domain.DirectionAfter, CursorSequence: 1}, wantErr: domain.ErrNotFound},
 		}
 
 		for _, tt := range tests {
@@ -101,7 +102,7 @@ func TestRead(t *testing.T) {
 
 	t.Run("walkingBackThroughAConversationVisitsEveryMessageOnce", func(t *testing.T) {
 		var got []int
-		query := domain.PageQuery{Size: domain.PageSize, ConversationID: "big", Direction: domain.DirectionNewest}
+		query := domain.PageQuery{IDYapeAccount: "acc-1", Size: domain.PageSize, ConversationID: "big", Direction: domain.DirectionNewest}
 		for pages := 0; ; pages++ {
 			require.Less(t, pages, 10, "the walk ends")
 			page, err := repo.ListMessages(ctx, query)
@@ -110,7 +111,7 @@ func TestRead(t *testing.T) {
 			if !page.HasMore {
 				break
 			}
-			query = domain.PageQuery{Size: domain.PageSize, ConversationID: "big", Direction: domain.DirectionBefore, CursorSequence: page.Messages[0].Sequence}
+			query = domain.PageQuery{IDYapeAccount: "acc-1", Size: domain.PageSize, ConversationID: "big", Direction: domain.DirectionBefore, CursorSequence: page.Messages[0].Sequence}
 		}
 
 		assert.Equal(t, sequenceRange(1, 250), got)
@@ -118,7 +119,7 @@ func TestRead(t *testing.T) {
 
 	t.Run("walkingForwardThroughAConversationVisitsEveryMessageOnce", func(t *testing.T) {
 		got := sequenceRange(1, 1) // the first message is the starting cursor
-		query := domain.PageQuery{Size: domain.PageSize, ConversationID: "big", Direction: domain.DirectionAfter, CursorSequence: 1}
+		query := domain.PageQuery{IDYapeAccount: "acc-1", Size: domain.PageSize, ConversationID: "big", Direction: domain.DirectionAfter, CursorSequence: 1}
 		for pages := 0; ; pages++ {
 			require.Less(t, pages, 10, "the walk ends")
 			page, err := repo.ListMessages(ctx, query)
@@ -127,7 +128,7 @@ func TestRead(t *testing.T) {
 			if !page.HasMore {
 				break
 			}
-			query = domain.PageQuery{Size: domain.PageSize, ConversationID: "big", Direction: domain.DirectionAfter, CursorSequence: page.Messages[len(page.Messages)-1].Sequence}
+			query = domain.PageQuery{IDYapeAccount: "acc-1", Size: domain.PageSize, ConversationID: "big", Direction: domain.DirectionAfter, CursorSequence: page.Messages[len(page.Messages)-1].Sequence}
 		}
 
 		assert.Equal(t, sequenceRange(1, 250), got)
@@ -135,7 +136,7 @@ func TestRead(t *testing.T) {
 
 	t.Run("walkingBackWithASmallPageSizeVisitsEveryMessageOnce", func(t *testing.T) {
 		var got []int
-		query := domain.PageQuery{Size: 33, ConversationID: "big", Direction: domain.DirectionNewest}
+		query := domain.PageQuery{IDYapeAccount: "acc-1", Size: 33, ConversationID: "big", Direction: domain.DirectionNewest}
 		for pages := 0; ; pages++ {
 			require.Less(t, pages, 10, "the walk ends")
 			page, err := repo.ListMessages(ctx, query)
@@ -145,26 +146,56 @@ func TestRead(t *testing.T) {
 			if !page.HasMore {
 				break
 			}
-			query = domain.PageQuery{Size: 33, ConversationID: "big", Direction: domain.DirectionBefore, CursorSequence: page.Messages[0].Sequence}
+			query = domain.PageQuery{IDYapeAccount: "acc-1", Size: 33, ConversationID: "big", Direction: domain.DirectionBefore, CursorSequence: page.Messages[0].Sequence}
 		}
 
 		assert.Equal(t, sequenceRange(1, 250), got)
 	})
 
 	t.Run("messageFieldsAreRead", func(t *testing.T) {
-		page, err := repo.ListMessages(ctx, domain.PageQuery{Size: domain.PageSize, ConversationID: "noaccount", Direction: domain.DirectionNewest})
+		page, err := repo.ListMessages(ctx, domain.PageQuery{IDYapeAccount: "acc-3", Size: domain.PageSize, ConversationID: "guardrail", Direction: domain.DirectionNewest})
 
 		require.NoError(t, err)
 		require.Len(t, page.Messages, 1)
 		m := page.Messages[0]
-		assert.Equal(t, "noaccount", m.ConversationID)
+		assert.Equal(t, "guardrail", m.ConversationID)
 		assert.Equal(t, 1, m.Sequence)
 		assert.Equal(t, domain.RoleMaker, m.Role)
 		assert.Equal(t, "text", m.Type)
 		assert.Equal(t, "GuardrailResponseSent", m.EventName)
-		assert.Empty(t, m.IDYapeAccount, "a NULL account reads as empty")
-		assert.False(t, m.Truncated)
-		assert.Equal(t, 2026, m.OccurredAt.Year())
+		assert.Equal(t, "acc-3", m.IDYapeAccount)
+	})
+
+	// A conversation is read for an account. Another account's is not found, as one that does not exist: not its messages, and not
+	// whether a cursor is one of its messages. One that has no account at all is nobody's.
+	t.Run("onlyTheConversationsOfTheAccountAreFound", func(t *testing.T) {
+		for _, tc := range []struct {
+			name  string
+			query domain.PageQuery
+		}{
+			{"another accounts newest page", domain.PageQuery{IDYapeAccount: "acc-2", ConversationID: "big", Direction: domain.DirectionNewest}},
+			{"another accounts page before a real cursor", domain.PageQuery{IDYapeAccount: "acc-2", ConversationID: "big", Direction: domain.DirectionBefore, CursorSequence: 100}},
+			{"another accounts page after a real cursor", domain.PageQuery{IDYapeAccount: "acc-2", ConversationID: "big", Direction: domain.DirectionAfter, CursorSequence: 100}},
+			{"the conversation of the other account, asked as the first", domain.PageQuery{IDYapeAccount: "acc-1", ConversationID: "other", Direction: domain.DirectionNewest}},
+			{"a conversation with no account", domain.PageQuery{IDYapeAccount: "acc-1", ConversationID: "noaccount", Direction: domain.DirectionNewest}},
+			{"an account that has no conversations", domain.PageQuery{IDYapeAccount: "acc-none", ConversationID: "big", Direction: domain.DirectionNewest}},
+			{"an account that only looks like one", domain.PageQuery{IDYapeAccount: "acc-1 ", ConversationID: "big", Direction: domain.DirectionNewest}},
+			{"the account in other case", domain.PageQuery{IDYapeAccount: "ACC-1", ConversationID: "big", Direction: domain.DirectionNewest}},
+		} {
+			tc.query.Size = domain.PageSize
+			page, err := repo.ListMessages(ctx, tc.query)
+
+			require.ErrorIs(t, err, domain.ErrNotFound, tc.name)
+			assert.Empty(t, page.Messages, tc.name)
+		}
+	})
+
+	t.Run("theConversationsOfAnotherAccountAreItsOwn", func(t *testing.T) {
+		page, err := repo.ListMessages(ctx, domain.PageQuery{IDYapeAccount: "acc-2", ConversationID: "other", Size: domain.PageSize, Direction: domain.DirectionNewest})
+
+		require.NoError(t, err)
+		require.Len(t, page.Messages, 1)
+		assert.Equal(t, "x", page.Messages[0].Text)
 	})
 
 	t.Run("conversationsOfAnAccount", func(t *testing.T) {

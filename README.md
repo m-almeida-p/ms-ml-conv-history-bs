@@ -57,7 +57,7 @@ To see that the API serves what the consumers wrote, produce a conversation (for
 `history` by default (`POSTGRES_SEARCH_PATH=camel_history` reads the old consumer's tables):
 
 ```bash
-curl -s "localhost:3100/v1/conversations/<conversationId>/messages"
+curl -s "localhost:3100/v1/conversations/<conversationId>/messages?idYapeAccount=<account>"
 docker exec yape-postgres psql -U postgres -c "select role, text from history.conversation_messages where conversation_id = '<conversationId>' order by sequence"
 ```
 
@@ -65,15 +65,15 @@ docker exec yape-postgres psql -U postgres -c "select role, text from history.co
 
 ```bash
 curl -s "localhost:3100/v1/conversations?idYapeAccount=<account>"
-curl -s "localhost:3100/v1/conversations/<conversationId>/messages"
-curl -sg "localhost:3100/v1/conversations/<conversationId>/messages?page[before]=<_id>&page[size]=20"
+curl -s "localhost:3100/v1/conversations/<conversationId>/messages?idYapeAccount=<account>"
+curl -sg "localhost:3100/v1/conversations/<conversationId>/messages?idYapeAccount=<account>&page[before]=<_id>&page[size]=20"
 curl -sg "localhost:3100/v1/conversations?idYapeAccount=<account>&page[before]=<cursor>"   # the cursor of a conversation, or the one in the Link header
 curl -s  localhost:3100/health
 ```
 
 | Route | Answer |
 |-------|--------|
-| `GET /v1/conversations/{conversationId}/messages` | up to 100 messages, oldest first; `page[before]` or `page[after]` (one at most) take a message `_id`, `page[size]` asks for fewer; more pages are announced in the `Link` header |
+| `GET /v1/conversations/{conversationId}/messages?idYapeAccount=` | up to 100 messages, oldest first, **of a conversation of that account**: one of another account is a `404`, the same as one that does not exist; `page[before]` or `page[after]` (one at most) take a message `_id`, `page[size]` asks for fewer; more pages are announced in the `Link` header |
 | `GET /v1/conversations?idYapeAccount=&page[before]=&page[after]=&page[size]=` | a page of the account's conversations with chat messages, most recent first; each carries an opaque `cursor`; more pages are announced in the `Link` header |
 | `GET /health` | `200` when the database answers, `503` otherwise |
 
@@ -101,7 +101,7 @@ copilot mcp add --transport http conv-history-local http://localhost:3200/mcp
 |------|---------|-------|
 | `list_accounts` | which accounts have history, how many conversations and messages, when last active | `conversation_summaries` |
 | `get_recent_conversations` | an account's latest conversations (no text) | the `History` service, as the API |
-| `get_transcript` | the chat of a conversation, newest page first, paged back with `before` | the `History` service, as the API |
+| `get_transcript` | the chat of a conversation of an account (`id_yape_account`), newest page first, paged back with `before` | the `History` service, as the API |
 | `get_activity_funnel` | how an account's attempts of a flow ended: approved, rejected, failed, abandoned, expired, open, none | `conversation_flow_segments` |
 | `get_latency_stats` | seconds from the request to the card and from the card to the decision, with and without an OTP | `conversation_flow_segments`, `conversation_inbox` |
 | `get_tool_health` | calls and failures of each tool of the agent | `conversation_inbox` |

@@ -152,7 +152,7 @@ func TestMessagePagingAtVolume(t *testing.T) {
 			var latencies []time.Duration
 			seen := 0
 			expect := giantMessages
-			query := domain.PageQuery{Size: size, ConversationID: giantConversation, Direction: domain.DirectionNewest}
+			query := domain.PageQuery{IDYapeAccount: "acc_giant", Size: size, ConversationID: giantConversation, Direction: domain.DirectionNewest}
 			for {
 				at := time.Now()
 				page, err := repo.ListMessages(ctx, query)
@@ -168,7 +168,7 @@ func TestMessagePagingAtVolume(t *testing.T) {
 				if !page.HasMore {
 					break
 				}
-				query = domain.PageQuery{Size: size, ConversationID: giantConversation, Direction: domain.DirectionBefore, CursorSequence: page.Messages[0].Sequence}
+				query = domain.PageQuery{IDYapeAccount: "acc_giant", Size: size, ConversationID: giantConversation, Direction: domain.DirectionBefore, CursorSequence: page.Messages[0].Sequence}
 			}
 
 			sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
@@ -182,7 +182,7 @@ func TestMessagePagingAtVolume(t *testing.T) {
 
 	t.Run("aSizeOfOneIsStillAnIndexSeekInTheBiggestConversation", func(t *testing.T) {
 		started := time.Now()
-		page, err := repo.ListMessages(ctx, domain.PageQuery{Size: 1, ConversationID: giantConversation, Direction: domain.DirectionBefore, CursorSequence: giantMessages / 2})
+		page, err := repo.ListMessages(ctx, domain.PageQuery{IDYapeAccount: "acc_giant", Size: 1, ConversationID: giantConversation, Direction: domain.DirectionBefore, CursorSequence: giantMessages / 2})
 
 		require.NoError(t, err)
 		require.Len(t, page.Messages, 1)

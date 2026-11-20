@@ -296,10 +296,13 @@ func TestNoLinkIsBuiltFromAnAccountOrIDThatIsNotSafeInAURL(t *testing.T) {
 		assert.Empty(t, conversationsContinuation(account, list), "account %q", account)
 	}
 
-	page := domain.MessagePage{Direction: domain.DirectionNewest, Size: 5, HasMore: true, BeforeCursor: "3", AfterCursor: "8"}
+	page := domain.MessagePage{Direction: domain.DirectionNewest, Size: 5, HasMore: true, BeforeCursor: "3", AfterCursor: "8", ConversationID: "conv_v1_a"}
+	for _, account := range []string{"", "acc 1", "acc&page[size]=1", "acc\r\nX-Injected: 1", "acc#x", "a/b", "é"} {
+		assert.Empty(t, continuation(account, page), "account %q", account)
+	}
 	for _, id := range []string{"", "conv a", "c&page[size]=1", "c\r\nX-Injected: 1", "c#x", "a/b"} {
 		page.ConversationID = id
-		assert.Empty(t, continuation(page), "conversation id %q", id)
+		assert.Empty(t, continuation("acc-1", page), "conversation id %q", id)
 	}
 }
 

@@ -275,6 +275,13 @@ paths:
         name: conversationId
         required: true
         type: string
+      - description: 'Customer account the conversation belongs to (letters, digits,
+          . _ : -, up to 128 characters), sent once. A conversation of another account
+          is not found'
+        in: query
+        name: idYapeAccount
+        required: true
+        type: string
       - description: 'Message _id: read the page of messages older than it'
         in: query
         name: page[before]

@@ -175,9 +175,13 @@ func TestMessages(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// A conversation is read for an account, and only the account's own is found: every case here is read as acc-1.
+			tt.req.IDYapeAccount = "acc-1"
 			repo := mocks.NewMessageRepository(t)
 			if tt.wantQuery != nil {
-				repo.On("ListMessages", mock.Anything, *tt.wantQuery).Return(tt.page, tt.repoErr).Once()
+				query := *tt.wantQuery
+				query.IDYapeAccount = "acc-1"
+				repo.On("ListMessages", mock.Anything, query).Return(tt.page, tt.repoErr).Once()
 			}
 
 			got, err := NewService(repo).Messages(context.Background(), tt.req)
@@ -372,3 +376,48 @@ func TestConversations(t *testing.T) {
 }
 
 func ptr(s string) *string { return &s }
+
+// A conversation is read for an account: with no account, or a malformed one, nothing is read, and the repository is never asked.
+func TestMessages_TheAccountIsRequired(t *testing.T) {
+	for name, account := range map[string]string{
+		"missing":             "",
+		"only spaces":         "   ",
+		"with a space inside": "acc 1",
+		"with a slash":        "acc/1",
+		"with a nul":          "acc\x001",
+		"with a line break":   "acc-1\n",
+		"of 129 characters":   strings.Repeat("a", 129),
+		"not ascii":           "cuenta-ñ",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := NewService(mocks.NewMessageRepository(t)).Messages(context.Background(),
+				service.MessagesRequest{ConversationID: "conv_v1_a", IDYapeAccount: account})
+
+			require.ErrorIs(t, err, domain.ErrInvalidRequest)
+			assert.Contains(t, err.Error(), "idYapeAccount")
+			assert.NotContains(t, err.Error(), "ñ", "the error does not echo what was sent")
+		})
+	}
+
+	t.Run("an account of 128 characters is accepted and reaches the store", func(t *testing.T) {
+		account := strings.Repeat("a", 128)
+		repo := mocks.NewMessageRepository(t)
+		repo.On("ListMessages", mock.Anything, domain.PageQuery{
+			IDYapeAccount: account, ConversationID: "conv_v1_a", Direction: domain.DirectionNewest, Size: domain.PageSize,
+		}).Return(domain.Page{}, domain.ErrNotFound).Once()
+
+		_, err := NewService(repo).Messages(context.Background(), service.MessagesRequest{ConversationID: "conv_v1_a", IDYapeAccount: account})
+
+		require.ErrorIs(t, err, domain.ErrNotFound)
+	})
+
+	t.Run("a conversation of another account is not found, as one that does not exist", func(t *testing.T) {
+		repo := mocks.NewMessageRepository(t)
+		repo.On("ListMessages", mock.Anything, mock.MatchedBy(func(q domain.PageQuery) bool { return q.IDYapeAccount == "acc-2" })).
+			Return(domain.Page{}, domain.ErrNotFound).Once()
+
+		_, err := NewService(repo).Messages(context.Background(), service.MessagesRequest{ConversationID: "conv_v1_a", IDYapeAccount: "acc-2"})
+
+		require.ErrorIs(t, err, domain.ErrNotFound)
+	})
+}

@@ -31,12 +31,16 @@ func (s *Service) Messages(ctx context.Context, req service.MessagesRequest) (do
 		return domain.MessagePage{}, domain.InvalidRequest("the conversation id is malformed")
 	}
 
+	if !domain.ValidIdentifier(req.IDYapeAccount) {
+		return domain.MessagePage{}, domain.InvalidRequest("idYapeAccount is missing or malformed")
+	}
+
 	size, err := parsePageSize(req.Size, domain.PageSize)
 	if err != nil {
 		return domain.MessagePage{}, err
 	}
 
-	query := domain.PageQuery{ConversationID: req.ConversationID, Direction: domain.DirectionNewest, Size: size}
+	query := domain.PageQuery{IDYapeAccount: req.IDYapeAccount, ConversationID: req.ConversationID, Direction: domain.DirectionNewest, Size: size}
 
 	switch {
 	case req.Before != nil && req.After != nil:

@@ -144,7 +144,7 @@ func TestAPI(t *testing.T) {
 	}
 
 	t.Run("followingPrevLinksWalksBackThroughTheWholeConversation", func(t *testing.T) {
-		texts, sizes := walkBack(t, "/v1/conversations/conv_big/messages")
+		texts, sizes := walkBack(t, "/v1/conversations/conv_big/messages?idYapeAccount=acc-api")
 
 		assert.Equal(t, []int{100, 100, 30}, sizes)
 		require.Len(t, texts, 230)
@@ -154,9 +154,9 @@ func TestAPI(t *testing.T) {
 	})
 
 	t.Run("theNewestPageSaysThereIsMoreOnlyInTheHeader", func(t *testing.T) {
-		_, body, header := getWithHeader("/v1/conversations/conv_big/messages")
+		_, body, header := getWithHeader("/v1/conversations/conv_big/messages?idYapeAccount=acc-api")
 
-		assert.Equal(t, `</v1/conversations/conv_big/messages?page[before]=131>; rel="prev"`, header.Get("Link"))
+		assert.Equal(t, `</v1/conversations/conv_big/messages?idYapeAccount=acc-api&page[before]=131>; rel="prev"`, header.Get("Link"))
 		var page apiMessages
 		require.NoError(t, json.Unmarshal(body, &page))
 		assert.Len(t, page.Messages, 100)
@@ -164,7 +164,7 @@ func TestAPI(t *testing.T) {
 	})
 
 	t.Run("aChosenPageSizeSurvivesEveryLinkOfTheWalk", func(t *testing.T) {
-		texts, sizes := walkBack(t, "/v1/conversations/conv_big/messages?page[size]=40")
+		texts, sizes := walkBack(t, "/v1/conversations/conv_big/messages?idYapeAccount=acc-api&page[size]=40")
 
 		assert.Equal(t, []int{40, 40, 40, 40, 40, 30}, sizes)
 		require.Len(t, texts, 230)
@@ -175,7 +175,7 @@ func TestAPI(t *testing.T) {
 
 	t.Run("aSizeThatDividesTheConversationExactlyLeavesNoEmptyLastPage", func(t *testing.T) {
 		for _, size := range []int{10, 23, 46} {
-			texts, sizes := walkBack(t, fmt.Sprintf("/v1/conversations/conv_big/messages?page[size]=%d", size))
+			texts, sizes := walkBack(t, fmt.Sprintf("/v1/conversations/conv_big/messages?idYapeAccount=acc-api&page[size]=%d", size))
 
 			want := make([]int, 230/size)
 			for i := range want {
@@ -187,7 +187,7 @@ func TestAPI(t *testing.T) {
 	})
 
 	t.Run("aSizeJustAboveTheConversationReturnsItAllWithoutALink", func(t *testing.T) {
-		_, body, header := getWithHeader("/v1/conversations/conv_gaps/messages?page[size]=4")
+		_, body, header := getWithHeader("/v1/conversations/conv_gaps/messages?idYapeAccount=acc-gaps&page[size]=4")
 
 		var page apiMessages
 		require.NoError(t, json.Unmarshal(body, &page))
@@ -196,29 +196,29 @@ func TestAPI(t *testing.T) {
 	})
 
 	t.Run("aSizeOfOneWalksAConversationWhoseSequenceHasGaps", func(t *testing.T) {
-		texts, sizes := walkBack(t, "/v1/conversations/conv_gaps/messages?page[size]=1")
+		texts, sizes := walkBack(t, "/v1/conversations/conv_gaps/messages?idYapeAccount=acc-gaps&page[size]=1")
 
 		assert.Equal(t, []int{1, 1, 1}, sizes)
 		assert.Equal(t, []string{"one", "two", "three"}, texts)
 	})
 
 	t.Run("anExplicitSizeOfOneHundredIsTheDefaultSoTheLinkDoesNotRepeatIt", func(t *testing.T) {
-		_, _, header := getWithHeader("/v1/conversations/conv_big/messages?page[size]=100")
+		_, _, header := getWithHeader("/v1/conversations/conv_big/messages?idYapeAccount=acc-api&page[size]=100")
 
-		assert.Equal(t, `</v1/conversations/conv_big/messages?page[before]=131>; rel="prev"`, header.Get("Link"))
+		assert.Equal(t, `</v1/conversations/conv_big/messages?idYapeAccount=acc-api&page[before]=131>; rel="prev"`, header.Get("Link"))
 	})
 
 	t.Run("aSizeOfNinetyNineRepeatsItInTheLink", func(t *testing.T) {
-		_, body, header := getWithHeader("/v1/conversations/conv_big/messages?page[size]=99")
+		_, body, header := getWithHeader("/v1/conversations/conv_big/messages?idYapeAccount=acc-api&page[size]=99")
 
 		var page apiMessages
 		require.NoError(t, json.Unmarshal(body, &page))
 		assert.Len(t, page.Messages, 99)
-		assert.Equal(t, `</v1/conversations/conv_big/messages?page[before]=132&page[size]=99>; rel="prev"`, header.Get("Link"))
+		assert.Equal(t, `</v1/conversations/conv_big/messages?idYapeAccount=acc-api&page[before]=132&page[size]=99>; rel="prev"`, header.Get("Link"))
 	})
 
 	t.Run("theSizeAppliesToTheOtherDirectionAndEncodedBracketsToo", func(t *testing.T) {
-		status, body, _ := getWithHeader("/v1/conversations/conv_big/messages?page%5Bafter%5D=10&page%5Bsize%5D=3")
+		status, body, _ := getWithHeader("/v1/conversations/conv_big/messages?idYapeAccount=acc-api&page%5Bafter%5D=10&page%5Bsize%5D=3")
 
 		require.Equal(t, http.StatusOK, status)
 		var page apiMessages
@@ -230,7 +230,7 @@ func TestAPI(t *testing.T) {
 
 	t.Run("followingNextLinksWalksForwardWithTheChosenSize", func(t *testing.T) {
 		var texts []string
-		path := "/v1/conversations/conv_big/messages?page[after]=190&page[size]=15"
+		path := "/v1/conversations/conv_big/messages?idYapeAccount=acc-api&page[after]=190&page[size]=15"
 		for pages := 0; path != ""; pages++ {
 			require.Less(t, pages, 10, "the walk ends")
 			status, body, header := getWithHeader(path)
@@ -250,7 +250,7 @@ func TestAPI(t *testing.T) {
 	})
 
 	t.Run("messagesCarryTheSmoochFields", func(t *testing.T) {
-		status, body := get("/v1/conversations/conv_big/messages?page[after]=228")
+		status, body := get("/v1/conversations/conv_big/messages?idYapeAccount=acc-api&page[after]=228")
 
 		require.Equal(t, http.StatusOK, status)
 		var page apiMessages
@@ -266,7 +266,7 @@ func TestAPI(t *testing.T) {
 	})
 
 	t.Run("theLastPageHasNoLinkHeader", func(t *testing.T) {
-		status, _, header := getWithHeader("/v1/conversations/conv_big/messages?page[after]=228")
+		status, _, header := getWithHeader("/v1/conversations/conv_big/messages?idYapeAccount=acc-api&page[after]=228")
 
 		require.Equal(t, http.StatusOK, status)
 		assert.Empty(t, header.Values("Link"))
@@ -451,14 +451,14 @@ func TestAPI(t *testing.T) {
 			wantStatus int
 			wantType   string
 		}{
-			{name: "bothCursors", path: "/v1/conversations/conv_big/messages?page[before]=100&page[after]=100", wantStatus: 400, wantType: "invalid-request"},
-			{name: "cursorNotANumber", path: "/v1/conversations/conv_big/messages?page[before]=abc", wantStatus: 400, wantType: "invalid-cursor"},
-			{name: "cursorOfNoMessage", path: "/v1/conversations/conv_big/messages?page[after]=99999", wantStatus: 400, wantType: "invalid-cursor"},
-			{name: "unknownConversation", path: "/v1/conversations/conv_nope/messages", wantStatus: 404, wantType: "conversation-not-found"},
-			{name: "malformedConversationID", path: "/v1/conversations/bad%20id/messages", wantStatus: 400, wantType: "invalid-request"},
+			{name: "bothCursors", path: "/v1/conversations/conv_big/messages?idYapeAccount=acc-api&page[before]=100&page[after]=100", wantStatus: 400, wantType: "invalid-request"},
+			{name: "cursorNotANumber", path: "/v1/conversations/conv_big/messages?idYapeAccount=acc-api&page[before]=abc", wantStatus: 400, wantType: "invalid-cursor"},
+			{name: "cursorOfNoMessage", path: "/v1/conversations/conv_big/messages?idYapeAccount=acc-api&page[after]=99999", wantStatus: 400, wantType: "invalid-cursor"},
+			{name: "unknownConversation", path: "/v1/conversations/conv_nope/messages?idYapeAccount=acc-api", wantStatus: 404, wantType: "conversation-not-found"},
+			{name: "malformedConversationID", path: "/v1/conversations/bad%20id/messages?idYapeAccount=acc-api", wantStatus: 400, wantType: "invalid-request"},
 			{name: "missingAccount", path: "/v1/conversations", wantStatus: 400, wantType: "invalid-request"},
-			{name: "emptyCursor", path: "/v1/conversations/conv_big/messages?page[before]=", wantStatus: 400, wantType: "invalid-cursor"},
-			{name: "emptyCursorBesideARealOne", path: "/v1/conversations/conv_big/messages?page[before]=&page[after]=100", wantStatus: 400, wantType: "invalid-request"},
+			{name: "emptyCursor", path: "/v1/conversations/conv_big/messages?idYapeAccount=acc-api&page[before]=", wantStatus: 400, wantType: "invalid-cursor"},
+			{name: "emptyCursorBesideARealOne", path: "/v1/conversations/conv_big/messages?idYapeAccount=acc-api&page[before]=&page[after]=100", wantStatus: 400, wantType: "invalid-request"},
 			{name: "listBothCursors", path: "/v1/conversations?idYapeAccount=acc-list&page[before]=list_1&page[after]=list_2", wantStatus: 400, wantType: "invalid-request"},
 			{name: "listConversationIDIsNotACursor", path: "/v1/conversations?idYapeAccount=acc-list&page[before]=conv_big", wantStatus: 400, wantType: "invalid-cursor"},
 			{name: "listMessageCursorIsNotAConversationCursor", path: "/v1/conversations?idYapeAccount=acc-list&page[after]=100", wantStatus: 400, wantType: "invalid-cursor"},
@@ -470,22 +470,29 @@ func TestAPI(t *testing.T) {
 			{name: "listPageSizeOverTheMaximum", path: "/v1/conversations?idYapeAccount=acc-list&page[size]=101", wantStatus: 400, wantType: "invalid-request"},
 			{name: "listRepeatedCursor", path: "/v1/conversations?idYapeAccount=acc-list&page[before]=list_1&page[before]=list_2", wantStatus: 400, wantType: "invalid-request"},
 			{name: "listBadSizeBesideABadCursorIsASizeError", path: "/v1/conversations?idYapeAccount=acc-list&page[size]=0&page[before]=nope", wantStatus: 400, wantType: "invalid-request"},
-			{name: "pageSizeZero", path: "/v1/conversations/conv_big/messages?page[size]=0", wantStatus: 400, wantType: "invalid-request"},
-			{name: "pageSizeOverTheMaximum", path: "/v1/conversations/conv_big/messages?page[size]=101", wantStatus: 400, wantType: "invalid-request"},
-			{name: "pageSizeNotANumber", path: "/v1/conversations/conv_big/messages?page[size]=many", wantStatus: 400, wantType: "invalid-request"},
-			{name: "emptyPageSize", path: "/v1/conversations/conv_big/messages?page[size]=", wantStatus: 400, wantType: "invalid-request"},
-			{name: "pageSizeNegative", path: "/v1/conversations/conv_big/messages?page[size]=-5", wantStatus: 400, wantType: "invalid-request"},
-			{name: "pageSizeWithASign", path: "/v1/conversations/conv_big/messages?page[size]=%2B5", wantStatus: 400, wantType: "invalid-request"},
-			{name: "pageSizeWithLeadingZeros", path: "/v1/conversations/conv_big/messages?page[size]=05", wantStatus: 400, wantType: "invalid-request"},
-			{name: "pageSizeWithAnEncodedSpace", path: "/v1/conversations/conv_big/messages?page[size]=5%20", wantStatus: 400, wantType: "invalid-request"},
-			{name: "pageSizeBeyondAnInt64", path: "/v1/conversations/conv_big/messages?page[size]=99999999999999999999", wantStatus: 400, wantType: "invalid-request"},
-			{name: "badPageSizeBesideABadCursorIsAPageSizeError", path: "/v1/conversations/conv_big/messages?page[size]=0&page[before]=abc", wantStatus: 400, wantType: "invalid-request"},
-			{name: "goodPageSizeBesideABadCursorIsACursorError", path: "/v1/conversations/conv_big/messages?page[size]=5&page[before]=abc", wantStatus: 400, wantType: "invalid-cursor"},
-			{name: "goodPageSizeOnAnUnknownConversation", path: "/v1/conversations/conv_nope/messages?page[size]=5", wantStatus: 404, wantType: "conversation-not-found"},
-			{name: "repeatedPageSize", path: "/v1/conversations/conv_big/messages?page[size]=5&page[size]=6", wantStatus: 400, wantType: "invalid-request"},
-			{name: "repeatedCursor", path: "/v1/conversations/conv_big/messages?page[before]=100&page[before]=101", wantStatus: 400, wantType: "invalid-request"},
-			{name: "cursorWithASign", path: "/v1/conversations/conv_big/messages?page[after]=%2B100", wantStatus: 400, wantType: "invalid-cursor"},
+			{name: "pageSizeZero", path: "/v1/conversations/conv_big/messages?idYapeAccount=acc-api&page[size]=0", wantStatus: 400, wantType: "invalid-request"},
+			{name: "pageSizeOverTheMaximum", path: "/v1/conversations/conv_big/messages?idYapeAccount=acc-api&page[size]=101", wantStatus: 400, wantType: "invalid-request"},
+			{name: "pageSizeNotANumber", path: "/v1/conversations/conv_big/messages?idYapeAccount=acc-api&page[size]=many", wantStatus: 400, wantType: "invalid-request"},
+			{name: "emptyPageSize", path: "/v1/conversations/conv_big/messages?idYapeAccount=acc-api&page[size]=", wantStatus: 400, wantType: "invalid-request"},
+			{name: "pageSizeNegative", path: "/v1/conversations/conv_big/messages?idYapeAccount=acc-api&page[size]=-5", wantStatus: 400, wantType: "invalid-request"},
+			{name: "pageSizeWithASign", path: "/v1/conversations/conv_big/messages?idYapeAccount=acc-api&page[size]=%2B5", wantStatus: 400, wantType: "invalid-request"},
+			{name: "pageSizeWithLeadingZeros", path: "/v1/conversations/conv_big/messages?idYapeAccount=acc-api&page[size]=05", wantStatus: 400, wantType: "invalid-request"},
+			{name: "pageSizeWithAnEncodedSpace", path: "/v1/conversations/conv_big/messages?idYapeAccount=acc-api&page[size]=5%20", wantStatus: 400, wantType: "invalid-request"},
+			{name: "pageSizeBeyondAnInt64", path: "/v1/conversations/conv_big/messages?idYapeAccount=acc-api&page[size]=99999999999999999999", wantStatus: 400, wantType: "invalid-request"},
+			{name: "badPageSizeBesideABadCursorIsAPageSizeError", path: "/v1/conversations/conv_big/messages?idYapeAccount=acc-api&page[size]=0&page[before]=abc", wantStatus: 400, wantType: "invalid-request"},
+			{name: "goodPageSizeBesideABadCursorIsACursorError", path: "/v1/conversations/conv_big/messages?idYapeAccount=acc-api&page[size]=5&page[before]=abc", wantStatus: 400, wantType: "invalid-cursor"},
+			{name: "goodPageSizeOnAnUnknownConversation", path: "/v1/conversations/conv_nope/messages?idYapeAccount=acc-api&page[size]=5", wantStatus: 404, wantType: "conversation-not-found"},
+			{name: "repeatedPageSize", path: "/v1/conversations/conv_big/messages?idYapeAccount=acc-api&page[size]=5&page[size]=6", wantStatus: 400, wantType: "invalid-request"},
+			{name: "repeatedCursor", path: "/v1/conversations/conv_big/messages?idYapeAccount=acc-api&page[before]=100&page[before]=101", wantStatus: 400, wantType: "invalid-request"},
+			{name: "cursorWithASign", path: "/v1/conversations/conv_big/messages?idYapeAccount=acc-api&page[after]=%2B100", wantStatus: 400, wantType: "invalid-cursor"},
 			{name: "unknownRoute", path: "/v1/other", wantStatus: 404, wantType: "about:blank"},
+			{name: "noAccount", path: "/v1/conversations/conv_big/messages", wantStatus: 400, wantType: "invalid-request"},
+			{name: "emptyAccount", path: "/v1/conversations/conv_big/messages?idYapeAccount=", wantStatus: 400, wantType: "invalid-request"},
+			{name: "repeatedAccount", path: "/v1/conversations/conv_big/messages?idYapeAccount=acc-api&idYapeAccount=acc-gaps", wantStatus: 400, wantType: "invalid-request"},
+			{name: "anAccountThatIsNotAnIdentifier", path: "/v1/conversations/conv_big/messages?idYapeAccount=acc%20api", wantStatus: 400, wantType: "invalid-request"},
+			{name: "anotherAccountsConversation", path: "/v1/conversations/conv_big/messages?idYapeAccount=acc-gaps", wantStatus: 404, wantType: "conversation-not-found"},
+			{name: "anotherAccountsConversationBeforeARealCursor", path: "/v1/conversations/conv_big/messages?idYapeAccount=acc-gaps&page[before]=100", wantStatus: 404, wantType: "conversation-not-found"},
+			{name: "anotherAccountsConversationAfterARealCursor", path: "/v1/conversations/conv_big/messages?idYapeAccount=acc-gaps&page[after]=100", wantStatus: 404, wantType: "conversation-not-found"},
 		}
 
 		for _, tt := range tests {
@@ -515,6 +522,25 @@ func TestAPI(t *testing.T) {
 		}
 	})
 
+	// Someone else's conversation says no more than one that does not exist: the same status and the same body, so a client cannot tell
+	// them apart, and cannot learn that an id is taken.
+	t.Run("aConversationOfAnotherAccountLooksLikeOneThatDoesNotExist", func(t *testing.T) {
+		foreignStatus, foreign, _ := getWithHeader("/v1/conversations/conv_big/messages?idYapeAccount=acc-gaps")
+		missingStatus, missing, _ := getWithHeader("/v1/conversations/conv_nobody/messages?idYapeAccount=acc-gaps")
+
+		assert.Equal(t, http.StatusNotFound, foreignStatus)
+		assert.Equal(t, missingStatus, foreignStatus)
+		assert.Equal(t, string(missing), string(foreign))
+		assert.NotContains(t, string(foreign), "acc-", "the answer names no account")
+	})
+
+	t.Run("theAccountOfAConversationReadsItAndItsLinksKeepTheAccount", func(t *testing.T) {
+		status, _, header := getWithHeader("/v1/conversations/conv_big/messages?idYapeAccount=acc-api&page[size]=5")
+
+		require.Equal(t, http.StatusOK, status)
+		assert.Contains(t, header.Get("Link"), "idYapeAccount=acc-api")
+	})
+
 	t.Run("anyTextComesBackExactly", func(t *testing.T) {
 		texts := []string{
 			"hola 😀 👨‍👩‍👧 🇵🇪",
@@ -536,7 +562,7 @@ func TestAPI(t *testing.T) {
 			refreshSummaries(t, pool)
 		}
 
-		status, body := get("/v1/conversations/conv_text/messages")
+		status, body := get("/v1/conversations/conv_text/messages?idYapeAccount=acc-text")
 
 		require.Equal(t, http.StatusOK, status)
 		var page apiMessages

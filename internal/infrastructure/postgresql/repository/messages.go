@@ -21,6 +21,8 @@ var (
 	sqlMessageExists string
 	//go:embed SQL/conversation_exists.sql
 	sqlConversationExists string
+	//go:embed SQL/conversation_owned.sql
+	sqlConversationOwned string
 	//go:embed SQL/list_messages_newest.sql
 	sqlListMessagesNewest string
 	//go:embed SQL/list_messages_before.sql
@@ -64,6 +66,12 @@ func (r *PostgresMessageRepository) ListMessages(ctx context.Context, q domain.P
 		return domain.Page{}, fmt.Errorf("list messages: the page size must be from 1 to %d", domain.PageSize)
 	}
 
+	// A conversation is read for an account, and it is the account's own or it is not found. This comes before everything else, so
+	// that nothing of another account's conversation is read, not even whether a cursor is one of its messages.
+	if err := r.checkOwner(ctx, q); err != nil {
+		return domain.Page{}, err
+	}
+
 	query, args, err := r.pageQuery(ctx, q)
 	if err != nil {
 		return domain.Page{}, err
@@ -96,6 +104,20 @@ func (r *PostgresMessageRepository) ListMessages(ctx context.Context, q domain.P
 	}
 
 	return domain.Page{Messages: messages, HasMore: hasMore}, nil
+}
+
+// checkOwner confirms that the conversation is one of the account's. One that is not, or that does not exist, is domain.ErrNotFound:
+// the two cannot be told apart.
+func (r *PostgresMessageRepository) checkOwner(ctx context.Context, q domain.PageQuery) error {
+	var owned bool
+	if err := r.db.QueryRow(ctx, sqlConversationOwned, q.IDYapeAccount, q.ConversationID).Scan(&owned); err != nil {
+		return dbError("find the owner of the conversation", err)
+	}
+	if !owned {
+		return domain.ErrNotFound
+	}
+
+	return nil
 }
 
 // pageQuery chooses the statement and arguments that read the page q asks for.

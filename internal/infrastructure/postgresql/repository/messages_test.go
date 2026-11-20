@@ -312,6 +312,11 @@ func TestListMessages(t *testing.T) {
 			mock, err := pgxmock.NewPool()
 			require.NoError(t, err)
 			defer mock.Close()
+			// Every read starts by finding the conversation among the account's own, once the page size is known to be right.
+			tt.query.IDYapeAccount = "acc-1"
+			if tt.query.Size >= 1 && tt.query.Size <= domain.PageSize {
+				expectOwned(mock, "acc-1", tt.query.ConversationID, true)
+			}
 			tt.expect(mock)
 
 			page, err := NewPostgresMessageRepository(mock).ListMessages(context.Background(), tt.query)
@@ -351,9 +356,10 @@ func TestListMessagesFillsEveryField(t *testing.T) {
 	var none *string
 	rows := pgxmock.NewRows(messageColumns).
 		AddRow("conv", 4, "appMaker", "ms-ml-genai-agent-bs", "text", "hola", true, "AgentMessageSent", none, none, at)
+	expectOwned(mock, "acc-1", "conv", true)
 	mock.ExpectQuery("ORDER BY sequence DESC").WithArgs("conv", 101).WillReturnRows(rows)
 
-	page, err := NewPostgresMessageRepository(mock).ListMessages(context.Background(), domain.PageQuery{Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionNewest})
+	page, err := NewPostgresMessageRepository(mock).ListMessages(context.Background(), domain.PageQuery{IDYapeAccount: "acc-1", Size: domain.PageSize, ConversationID: "conv", Direction: domain.DirectionNewest})
 
 	require.NoError(t, err)
 	require.Len(t, page.Messages, 1)
@@ -654,4 +660,58 @@ func TestConversationStatements_CutTheFirstMessageAtTheLimitOfTheDomain(t *testi
 			assert.NotContains(t, sql, "{{", "no placeholder is left in the statement")
 		})
 	}
+}
+
+// expectOwned expects the question whether a conversation is one of the account's, and answers it.
+func expectOwned(m pgxmock.PgxPoolIface, account, conversation string, owned bool) {
+	m.ExpectQuery(`FROM conversation_summaries\s+WHERE 1=1\s+AND id_yape_account = \$1\s+AND conversation_id = \$2`).
+		WithArgs(account, conversation).WillReturnRows(pgxmock.NewRows([]string{"exists"}).AddRow(owned))
+}
+
+// A conversation is read for an account. One that belongs to another is not found, the same answer as one that does not exist, and
+// nothing of it is read: not its messages, and not whether a cursor is one of its messages.
+func TestListMessages_OnlyTheConversationsOfTheAccount(t *testing.T) {
+	for name, direction := range map[string]domain.Direction{
+		"the newest page": domain.DirectionNewest, "a page before a cursor": domain.DirectionBefore, "a page after a cursor": domain.DirectionAfter,
+	} {
+		t.Run("another account's conversation is not found for "+name, func(t *testing.T) {
+			mock, err := pgxmock.NewPool()
+			require.NoError(t, err)
+			defer mock.Close()
+			expectOwned(mock, "acc-2", "conv", false) // no other statement is expected: any other would fail the test
+
+			page, err := NewPostgresMessageRepository(mock).ListMessages(context.Background(),
+				domain.PageQuery{IDYapeAccount: "acc-2", ConversationID: "conv", Direction: direction, CursorSequence: 7, Size: 10})
+
+			require.ErrorIs(t, err, domain.ErrNotFound)
+			assert.Empty(t, page.Messages)
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+
+	t.Run("a database that fails while the owner is found is an error, never a conversation that is not found", func(t *testing.T) {
+		mock, err := pgxmock.NewPool()
+		require.NoError(t, err)
+		defer mock.Close()
+		mock.ExpectQuery(`FROM conversation_summaries`).WithArgs("acc-1", "conv").WillReturnError(errors.New("connection reset"))
+
+		_, err = NewPostgresMessageRepository(mock).ListMessages(context.Background(),
+			domain.PageQuery{IDYapeAccount: "acc-1", ConversationID: "conv", Direction: domain.DirectionNewest, Size: 10})
+
+		require.Error(t, err)
+		assert.NotErrorIs(t, err, domain.ErrNotFound)
+		assert.Contains(t, err.Error(), "find the owner")
+	})
+
+	t.Run("a page size that is wrong is refused before the database is asked", func(t *testing.T) {
+		mock, err := pgxmock.NewPool()
+		require.NoError(t, err)
+		defer mock.Close()
+
+		_, err = NewPostgresMessageRepository(mock).ListMessages(context.Background(),
+			domain.PageQuery{IDYapeAccount: "acc-1", ConversationID: "conv", Direction: domain.DirectionNewest, Size: 0})
+
+		require.Error(t, err)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
 }
