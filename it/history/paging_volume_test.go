@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -69,7 +70,8 @@ func pagingSQL(t *testing.T, name string) string {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "internal", "infrastructure", "postgresql", "repository", "SQL", name))
 	require.NoError(t, err)
 
-	return string(raw)
+	// The conversation statements carry the first message, whose limit the repository writes into them.
+	return strings.ReplaceAll(string(raw), "{{first_message_chars}}", strconv.Itoa(domain.FirstMessageMaxChars))
 }
 
 // TestMessagePagingAtVolume: with 400,000 messages stored and one conversation of 60,000, what a page
@@ -267,9 +269,15 @@ func TestConversationPagingAtVolume(t *testing.T) {
 				assert.Equal(t, size+1, rowsRead(t, plan, "conversation_summaries"), "%s, size %d reads one row more than the page:\n%s", direction, size, joined)
 				assert.NotContains(t, joined, "Seq Scan", "%s, size %d scans the table:\n%s", direction, size, joined)
 				assert.NotContains(t, joined, "Sort", "%s, size %d sorts instead of reading the index in order:\n%s", direction, size, joined)
-				assert.NotContains(t, joined, "conversation_messages", "%s, size %d reads the messages:\n%s", direction, size, joined)
+				// The first message of each conversation of the page, and of no other: one row of the messages for each row of the page,
+				// read through the key and never by scanning the table.
+				assert.LessOrEqual(t, rowsRead(t, plan, "conversation_messages"), 1, "%s, size %d reads more than the first message of a conversation:\n%s", direction, size, joined)
+				assert.NotContains(t, joined, "Seq Scan on conversation_messages", "%s, size %d scans the messages:\n%s", direction, size, joined)
+				assert.LessOrEqual(t, loopsOver(plan, "conversation_messages"), size+1, "%s, size %d looks up more conversations than the page has:\n%s", direction, size, joined)
 				assert.Contains(t, joined, "conversation_summaries_list_idx", "%s, size %d does not use the list index:\n%s", direction, size, joined)
-				assert.LessOrEqual(t, pagesTouched(t, plan), size+8, "%s, size %d touches %d pages", direction, size, pagesTouched(t, plan))
+				// The index and the row of the summaries, and for each conversation of the page the lookup of its first message in the key of
+				// the messages: about five pages each, whatever the size of the account or of the table.
+				assert.LessOrEqual(t, pagesTouched(t, plan), pagesPerConversation*(size+1)+8, "%s, size %d touches %d pages", direction, size, pagesTouched(t, plan))
 			}
 		}
 	})
@@ -280,9 +288,9 @@ func TestConversationPagingAtVolume(t *testing.T) {
 				plan := planFor(account, direction, 10)
 				measure(account+", "+direction, plan)
 
-				// About one page of the table for each row read, plus the index: the same for an account
+				// About a few pages for each row read (the summary and its first message), plus the index: the same for an account
 				// with five thousand conversations as for one with ten.
-				assert.LessOrEqual(t, pagesTouched(t, plan), rowsRead(t, plan, "conversation_summaries")+4, "%s, %s", account, direction)
+				assert.LessOrEqual(t, pagesTouched(t, plan), pagesPerConversation*rowsRead(t, plan, "conversation_summaries")+4, "%s, %s", account, direction)
 			}
 		}
 	})
@@ -318,3 +326,24 @@ func TestConversationPagingAtVolume(t *testing.T) {
 		assert.Less(t, latencies[len(latencies)-1], 3*time.Second, "the slowest page")
 	})
 }
+
+// loopsOver is the most times any scan of the table ran: for the first message, once for each conversation of the page.
+func loopsOver(plan []string, table string) int {
+	most := 0
+	for _, line := range plan {
+		if !strings.Contains(line, table) || !strings.Contains(line, "Scan") {
+			continue
+		}
+		if match := scanLoops.FindStringSubmatch(line); match != nil {
+			n, _ := strconv.Atoi(match[1])
+			most = max(most, n)
+		}
+	}
+
+	return most
+}
+
+// pagesPerConversation is the most pages a conversation of a list page costs: its summary and the lookup of its first message.
+const pagesPerConversation = 6
+
+var scanLoops = regexp.MustCompile(`loops=(\d+)`)

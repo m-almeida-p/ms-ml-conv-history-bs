@@ -232,9 +232,19 @@ and 1,200 at size 50 (2.1 s). The test asserts the rows and the pages, which do 
 A conversation is known when it has chat messages; a conversation of tool events alone answers `404`.
 ### Paging the conversation list
 
+
 `GET /v1/conversations?idYapeAccount=` pages the same way as the messages, so a client that can walk one can walk the other.
 The body holds the conversations only, most recent first inside a page; the way to another page is the `Link` header.
 Each conversation carries a `cursor`, its position in the list when it was read.
+
+**The first message.** Each conversation carries `firstMessage`: the first message the *user* wrote in it (not the agent's greeting), cut
+at 200 characters (`domain.FirstMessageMaxChars`, written into the three list statements), with `firstMessageTruncated` when it was cut
+there or at the agent's limit. It is absent when the conversation has no message from the user. It is read in the same statement as the
+page: the rows of the page are cut by `LIMIT` first, and only then does each look up its first message through the key of
+`conversation_messages` (`conversation_id, sequence`), so a page costs about five pages of the database for each conversation it returns,
+whatever the size of the account or of the table (`TestConversationPagingAtVolume`: 100 conversations in about 1 ms at 400,000
+messages). The text is data: a client puts it on a page as text, never as markup.
+
 
 ```http
 GET /v1/conversations?idYapeAccount=acc-1&page[size]=2
@@ -243,7 +253,8 @@ Link: </v1/conversations?idYapeAccount=acc-1&page[before]=1792505243500000~conv_
 ```
 ```json
 { "conversations": [
-  { "_id": "conv_v1_a", "cursor": "1792505543500000~conv_v1_a", "messageCount": 5, "firstReceived": 1792505243.5, "lastReceived": 1792505543.5 },
+  { "_id": "conv_v1_a", "cursor": "1792505543500000~conv_v1_a", "messageCount": 5, "firstReceived": 1792505243.5, "lastReceived": 1792505543.5,
+    "firstMessage": "quiero yapear" },
   { "_id": "conv_v1_b", "cursor": "1792505243500000~conv_v1_b", "messageCount": 1, "firstReceived": 1792505243.5, "lastReceived": 1792505243.5 } ] }
 ```
 

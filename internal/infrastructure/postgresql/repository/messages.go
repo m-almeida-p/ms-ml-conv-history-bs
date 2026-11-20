@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 
@@ -26,12 +28,22 @@ var (
 	//go:embed SQL/list_messages_after.sql
 	sqlListMessagesAfter string
 	//go:embed SQL/list_conversations.sql
-	sqlListConversations string
+	sqlListConversationsTemplate string
 	//go:embed SQL/list_conversations_before.sql
-	sqlListConversationsBefore string
+	sqlListConversationsBeforeTemplate string
 	//go:embed SQL/list_conversations_after.sql
-	sqlListConversationsAfter string
+	sqlListConversationsAfterTemplate string
+
+	// The conversation statements carry the first message; its limit is the domain's, written into the statement once.
+	sqlListConversations       = withFirstMessageLimit(sqlListConversationsTemplate)
+	sqlListConversationsBefore = withFirstMessageLimit(sqlListConversationsBeforeTemplate)
+	sqlListConversationsAfter  = withFirstMessageLimit(sqlListConversationsAfterTemplate)
 )
+
+// withFirstMessageLimit writes the limit of the first message into a conversation statement.
+func withFirstMessageLimit(sql string) string {
+	return strings.ReplaceAll(sql, "{{first_message_chars}}", strconv.Itoa(domain.FirstMessageMaxChars))
+}
 
 var _ repository.MessageRepository = (*PostgresMessageRepository)(nil)
 
@@ -182,10 +194,15 @@ func (r *PostgresMessageRepository) ListConversations(ctx context.Context, q dom
 
 	list := domain.ConversationList{Conversations: make([]domain.ConversationSummary, 0, q.Size+1)}
 	for rows.Next() {
-		var c domain.ConversationSummary
-		if err := rows.Scan(&c.ConversationID, &c.MessageCount, &c.FirstOccurredAt, &c.LastOccurredAt); err != nil {
+		var (
+			c         domain.ConversationSummary
+			first     *string
+			truncated *bool
+		)
+		if err := rows.Scan(&c.ConversationID, &c.MessageCount, &c.FirstOccurredAt, &c.LastOccurredAt, &first, &truncated); err != nil {
 			return domain.ConversationList{}, dbError("scan conversation", err)
 		}
+		c.FirstMessage, c.FirstMessageTruncated = value(first), truncated != nil && *truncated
 		list.Conversations = append(list.Conversations, c)
 	}
 	if err := rows.Err(); err != nil {

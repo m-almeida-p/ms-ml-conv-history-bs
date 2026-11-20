@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -364,12 +365,12 @@ func TestListMessagesFillsEveryField(t *testing.T) {
 
 func TestListConversations(t *testing.T) {
 	dbDown := errors.New("connection reset")
-	cols := []string{"conversation_id", "message_count", "first_occurred_at", "last_occurred_at"}
+	cols := []string{"conversation_id", "message_count", "first_occurred_at", "last_occurred_at", "first_message", "first_message_truncated"}
 	// rowsOf returns the named conversations in the order given, each one an hour older than the one before.
 	rowsOf := func(ids ...string) *pgxmock.Rows {
 		rows := pgxmock.NewRows(cols)
 		for i, id := range ids {
-			rows.AddRow(id, i+1, at, at.Add(-time.Duration(i)*time.Hour))
+			rows.AddRow(id, i+1, at, at.Add(-time.Duration(i)*time.Hour), (*string)(nil), (*bool)(nil))
 		}
 
 		return rows
@@ -538,7 +539,7 @@ func TestListConversations(t *testing.T) {
 			name:  "scanFails",
 			query: domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionNewest, Size: size},
 			expect: func(m pgxmock.PgxPoolIface) {
-				rows := pgxmock.NewRows(cols).AddRow("c", "many", at, at)
+				rows := pgxmock.NewRows(cols).AddRow("c", "many", at, at, (*string)(nil), (*bool)(nil))
 				m.ExpectQuery(newestSQL).WithArgs("acc-1", 101).WillReturnRows(rows)
 			},
 			wantErrText: "scan conversation",
@@ -610,4 +611,47 @@ func TestBrokenInvariantsAreNotTheClientsFault(t *testing.T) {
 	assert.NotErrorIs(t, err, domain.ErrInvalidRequest)
 
 	assert.NoError(t, mock.ExpectationsWereMet(), "none of them reached the database")
+}
+
+// The first message of each conversation comes with the list, in the same statement: the conversation's first message from the user,
+// cut at domain.FirstMessageMaxChars characters, and whether it was cut. A conversation with no message from the user has none.
+func TestListConversations_TheFirstMessageOfEachConversation(t *testing.T) {
+	cols := []string{"conversation_id", "message_count", "first_occurred_at", "last_occurred_at", "first_message", "first_message_truncated"}
+	text, cut, yes := "quiero yapear", false, true
+	long := strings.Repeat("ñ", domain.FirstMessageMaxChars)
+
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	t.Cleanup(mock.Close)
+	mock.ExpectQuery(`FROM conversation_summaries\s+WHERE 1=1\s+AND id_yape_account = \$1\s+ORDER BY`).WithArgs("acc-1", 4).WillReturnRows(
+		pgxmock.NewRows(cols).
+			AddRow("c", 3, at, at, &text, &cut).
+			AddRow("b", 2, at, at, &long, &yes).
+			AddRow("a", 1, at, at, (*string)(nil), (*bool)(nil)))
+
+	list, err := NewPostgresMessageRepository(mock).ListConversations(t.Context(),
+		domain.ConversationQuery{IDYapeAccount: "acc-1", Direction: domain.DirectionNewest, Size: 3})
+
+	require.NoError(t, err)
+	require.Len(t, list.Conversations, 3)
+	assert.Equal(t, "quiero yapear", list.Conversations[0].FirstMessage)
+	assert.False(t, list.Conversations[0].FirstMessageTruncated)
+	assert.Equal(t, long, list.Conversations[1].FirstMessage)
+	assert.True(t, list.Conversations[1].FirstMessageTruncated)
+	assert.Empty(t, list.Conversations[2].FirstMessage, "no message from the user: none")
+	assert.False(t, list.Conversations[2].FirstMessageTruncated)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// One statement, and the same limit in all three: the limit is a constant of the domain written into the SQL, so the two cannot differ.
+func TestConversationStatements_CutTheFirstMessageAtTheLimitOfTheDomain(t *testing.T) {
+	for name, sql := range map[string]string{
+		"newest": sqlListConversations, "before": sqlListConversationsBefore, "after": sqlListConversationsAfter,
+	} {
+		t.Run(name, func(t *testing.T) {
+			assert.Contains(t, sql, fmt.Sprintf("left(m.text, %d)", domain.FirstMessageMaxChars))
+			assert.Contains(t, sql, fmt.Sprintf("char_length(m.text) > %d", domain.FirstMessageMaxChars))
+			assert.NotContains(t, sql, "{{", "no placeholder is left in the statement")
+		})
+	}
 }

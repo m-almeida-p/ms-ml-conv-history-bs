@@ -66,6 +66,11 @@ type conversationResponse struct {
 	// FirstReceived and LastReceived are the times of the first and last message, in Unix seconds with milliseconds.
 	FirstReceived float64 `json:"firstReceived" example:"1792505243.5"`
 	LastReceived  float64 `json:"lastReceived" example:"1792505543.5"`
+	// FirstMessage is the first message the user wrote in the conversation, cut at 200 characters, so that a list can say what each
+	// conversation was about. It is absent when the conversation has no message from the user. It is text, never markup.
+	FirstMessage string `json:"firstMessage,omitempty" example:"quiero yapear"`
+	// FirstMessageTruncated is true when FirstMessage is not the whole message: it was cut at 200 characters or at the agent's limit.
+	FirstMessageTruncated bool `json:"firstMessageTruncated,omitempty" example:"false"`
 }
 
 // problemResponse is the body of every error: RFC 9457 problem details, served as
